@@ -1,0 +1,76 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Custom component classes */
+@layer components {
+  .btn {
+    @apply inline-flex items-center justify-center px-4 py-2 border border-transparent 
+           text-sm font-medium rounded-md shadow-sm focus:outline-none focus:ring-2 
+           focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed 
+           transition-colors;
+  }
+  
+  .btn-primary {
+    @apply text-white bg-blue-600 hover:bg-blue-700 focus:ring-blue-500;
+  }
+  
+  .btn-secondary {
+    @apply text-gray-700 bg-white border-gray-300 hover:bg-gray-50 focus:ring-blue-500;
+  }
+  
+  .btn-danger {
+    @apply text-white bg-red-600 hover:bg-red-700 focus:ring-red-500;
+  }
+  
+  .btn-sm {
+    @apply px-3 py-1.5 text-xs;
+  }
+  
+  .btn-lg {
+    @apply px-6 py-3 text-base;
+  }
+  
+  .card {
+    @apply bg-white rounded-lg shadow-sm border border-gray-200;
+  }
+  
+  .input {
+    @apply block w-full rounded-md border-gray-300 shadow-sm 
+           focus:border-blue-500 focus:ring-blue-500 sm:text-sm;
+  }
+  
+  .label {
+    @apply block text-sm font-medium text-gray-700;
+  }
+  
+  .spinner {
+    @apply w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full animate-spin;
+  }
+}
+
+/* Status colors */
+.status-on-time {
+  @apply text-green-700 bg-green-100;
+}
+
+.status-at-risk {
+  @apply text-yellow-700 bg-yellow-100;
+}
+
+.status-late {
+  @apply text-red-700 bg-red-100;
+}
+
+.status-unscheduled {
+  @apply text-gray-700 bg-gray-100;
+}
+
+/* Gantt chart customizations */
+.gantt-container {
+  @apply overflow-x-auto;
+}
+
+.gantt .bar-wrapper:hover .bar {
+  @apply opacity-80;
+}
