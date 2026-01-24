@@ -126,6 +126,8 @@ export const configApi = {
     api.get('/config/google-sheets'),
   testGoogleSheets: (spreadsheetId: string, serviceAccountJson: string) => 
     api.post('/config/google-sheets/test', { spreadsheetId, serviceAccountJson }),
+  validateGoogleSheets: (spreadsheetId: string, serviceAccountJson: string) => 
+    api.post('/config/google-sheets/validate', { spreadsheetId, serviceAccountJson }),
   saveGoogleSheets: (spreadsheetId: string, serviceAccountJson: string) => 
     api.post('/config/google-sheets/save', { spreadsheetId, serviceAccountJson }),
   deleteGoogleSheets: () => 

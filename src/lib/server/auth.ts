@@ -75,11 +75,29 @@ async function findUserOrganization(uid: string): Promise<{
   const db = getFirestore();
   
   // Use collection group query to find user across all member subcollections
-  const memberQuery = await db
-    .collectionGroup('members')
-    .where('uid', '==', uid)
-    .limit(1)
-    .get();
+  let memberQuery;
+  try {
+    memberQuery = await db
+      .collectionGroup('members')
+      .where('uid', '==', uid)
+      .limit(1)
+      .get();
+  } catch (error: unknown) {
+    const firestoreError = error as { code?: number; message?: string };
+    // Handle FAILED_PRECONDITION (code 9) - missing index
+    if (firestoreError.code === 9) {
+      console.error(
+        'Firestore index missing for collection group query on "members.uid".\n' +
+        'To fix this, either:\n' +
+        '1. Run: firebase deploy --only firestore:indexes\n' +
+        '2. Or create the index manually in Firebase Console:\n' +
+        '   - Collection group: members\n' +
+        '   - Field: uid (Ascending)\n' +
+        '   - Query scope: Collection group\n'
+      );
+    }
+    throw error;
+  }
 
   if (memberQuery.empty) {
     return null;
