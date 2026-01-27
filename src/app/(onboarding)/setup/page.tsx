@@ -24,10 +24,11 @@ import {
   LinkIcon,
   CheckIcon,
   XMarkIcon,
+  CloudIcon,
 } from '@heroicons/react/24/outline';
 
 type Step = 'org' | 'sheets' | 'invite' | 'complete';
-type SheetsSubStep = 'service-account' | 'upload-key' | 'share-sheet' | 'connect';
+type SheetsSubStep = 'enable-api' | 'service-account' | 'upload-key' | 'share-sheet' | 'connect';
 
 interface StepConfig {
   id: Step;
@@ -63,6 +64,7 @@ const steps: StepConfig[] = [
 ];
 
 const sheetsSubSteps = [
+  { id: 'enable-api' as SheetsSubStep, name: 'Enable API', icon: CloudIcon },
   { id: 'service-account' as SheetsSubStep, name: 'Create Service Account', icon: KeyIcon },
   { id: 'upload-key' as SheetsSubStep, name: 'Upload Key', icon: DocumentTextIcon },
   { id: 'share-sheet' as SheetsSubStep, name: 'Share Spreadsheet', icon: ShareIcon },
@@ -101,8 +103,129 @@ function CopyableText({ text, label }: { text: string; label?: string }) {
   );
 }
 
+// Enable Google Sheets API Guide Component
+function EnableApiGuide({ onComplete }: { onComplete: () => void }) {
+  const [expandedStep, setExpandedStep] = useState<number | null>(1);
+
+  const guideSteps = [
+    {
+      title: 'Open Google Cloud Console',
+      content: (
+        <div className="space-y-3">
+          <p className="text-gray-600">
+            First, you need to access the Google Cloud Console. If you don&apos;t have a project yet, 
+            you&apos;ll be prompted to create one.
+          </p>
+          <a
+            href="https://console.cloud.google.com"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-2 text-blue-600 hover:text-blue-700 font-medium"
+          >
+            Open Google Cloud Console
+            <ArrowTopRightOnSquareIcon className="h-4 w-4" />
+          </a>
+        </div>
+      ),
+    },
+    {
+      title: 'Create or Select a Project',
+      content: (
+        <div className="space-y-3">
+          <ol className="list-decimal list-inside space-y-2 text-gray-600">
+            <li>Click the project dropdown at the top of the page</li>
+            <li>Click <strong>&quot;NEW PROJECT&quot;</strong> (or select an existing one)</li>
+            <li>Enter a name like <strong>&quot;Production Scheduler&quot;</strong></li>
+            <li>Click <strong>&quot;CREATE&quot;</strong></li>
+            <li>Wait for the project to be created, then select it</li>
+          </ol>
+        </div>
+      ),
+    },
+    {
+      title: 'Enable the Google Sheets API',
+      content: (
+        <div className="space-y-3">
+          <p className="text-gray-600">
+            Navigate to the API Library and enable the Google Sheets API for your project.
+          </p>
+          <a
+            href="https://console.cloud.google.com/apis/library/sheets.googleapis.com"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-2 text-blue-600 hover:text-blue-700 font-medium"
+          >
+            Go to Google Sheets API
+            <ArrowTopRightOnSquareIcon className="h-4 w-4" />
+          </a>
+          <ol className="list-decimal list-inside space-y-2 text-gray-600 mt-2">
+            <li>Make sure your project is selected at the top</li>
+            <li>Click the <strong>&quot;ENABLE&quot;</strong> button</li>
+            <li>Wait for the API to be enabled (takes a few seconds)</li>
+          </ol>
+          <div className="bg-green-50 border border-green-200 rounded-lg p-3 flex gap-2">
+            <CheckCircleIcon className="h-5 w-5 text-green-600 flex-shrink-0 mt-0.5" />
+            <p className="text-sm text-green-800">
+              Once enabled, you&apos;ll see &quot;API Enabled&quot; with usage metrics on the page.
+            </p>
+          </div>
+        </div>
+      ),
+    },
+  ];
+
+  return (
+    <div className="space-y-4">
+      <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 flex gap-3">
+        <CloudIcon className="h-6 w-6 text-blue-600 flex-shrink-0" />
+        <div>
+          <p className="text-blue-900 font-medium">Why do I need to enable an API?</p>
+          <p className="text-sm text-blue-800 mt-1">
+            Google Cloud APIs are disabled by default for security. Enabling the Google Sheets API 
+            allows this application to read and write data to your spreadsheets through a secure connection.
+          </p>
+        </div>
+      </div>
+
+      <div className="space-y-2">
+        {guideSteps.map((step, index) => (
+          <div key={index} className="border border-gray-200 rounded-lg overflow-hidden">
+            <button
+              onClick={() => setExpandedStep(expandedStep === index + 1 ? null : index + 1)}
+              className="w-full px-4 py-3 flex items-center justify-between bg-white hover:bg-gray-50 transition-colors"
+            >
+              <span className="flex items-center gap-3">
+                <span className="w-6 h-6 rounded-full bg-blue-100 text-blue-700 flex items-center justify-center text-sm font-medium">
+                  {index + 1}
+                </span>
+                <span className="font-medium text-gray-900">{step.title}</span>
+              </span>
+              <ArrowRightIcon className={`h-4 w-4 text-gray-400 transition-transform ${
+                expandedStep === index + 1 ? 'rotate-90' : ''
+              }`} />
+            </button>
+            {expandedStep === index + 1 && (
+              <div className="px-4 pb-4 pt-2 bg-gray-50 border-t border-gray-100">
+                {step.content}
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+
+      <button
+        onClick={onComplete}
+        className="btn btn-primary w-full"
+      >
+        I&apos;ve enabled the Google Sheets API
+        <ArrowRightIcon className="h-4 w-4 ml-2" />
+      </button>
+    </div>
+  );
+}
+
 // Service Account Guide Component
-function ServiceAccountGuide({ onComplete }: { onComplete: () => void }) {
+function ServiceAccountGuide({ onComplete, onBack }: { onComplete: () => void; onBack?: () => void }) {
   const [expandedStep, setExpandedStep] = useState<number | null>(1);
 
   const guideSteps = [
@@ -204,79 +327,24 @@ function ServiceAccountGuide({ onComplete }: { onComplete: () => void }) {
         ))}
       </div>
 
-      <button
-        onClick={onComplete}
-        className="btn btn-primary w-full"
-      >
-        I have my JSON key file
-        <ArrowRightIcon className="h-4 w-4 ml-2" />
-      </button>
-    </div>
-  );
-}
-
-// Spreadsheet Structure Info Component
-function SpreadsheetStructureInfo() {
-  const [expanded, setExpanded] = useState(false);
-
-  return (
-    <div className="border border-gray-200 rounded-lg overflow-hidden">
-      <button
-        onClick={() => setExpanded(!expanded)}
-        className="w-full px-4 py-3 flex items-center justify-between bg-white hover:bg-gray-50 transition-colors"
-      >
-        <span className="flex items-center gap-2 text-gray-700">
-          <InformationCircleIcon className="h-5 w-5" />
-          <span className="font-medium">Required Spreadsheet Structure</span>
-        </span>
-        <ArrowRightIcon className={`h-4 w-4 text-gray-400 transition-transform ${
-          expanded ? 'rotate-90' : ''
-        }`} />
-      </button>
-      {expanded && (
-        <div className="px-4 pb-4 pt-2 bg-gray-50 border-t border-gray-100 space-y-3">
-          <p className="text-sm text-gray-600">
-            Your spreadsheet needs these sheets (tabs):
-          </p>
-          <ul className="space-y-2 text-sm">
-            <li className="flex items-start gap-2">
-              <CheckCircleIcon className="h-5 w-5 text-green-600 flex-shrink-0" />
-              <div>
-                <strong>Products</strong> - Your production jobs with columns for Job Number, 
-                Work Center, Customer, Quantity, etc.
-              </div>
-            </li>
-            <li className="flex items-start gap-2">
-              <CheckCircleIcon className="h-5 w-5 text-green-600 flex-shrink-0" />
-              <div>
-                <strong>Work Centers</strong> - Your machines/stations with ID, Name, and 
-                operating hours.
-              </div>
-            </li>
-            <li className="flex items-start gap-2">
-              <CheckCircleIcon className="h-5 w-5 text-green-600 flex-shrink-0" />
-              <div>
-                <strong>Holidays</strong> - Non-working days with Date and Name columns.
-              </div>
-            </li>
-            <li className="flex items-start gap-2">
-              <CheckCircleIcon className="h-5 w-5 text-green-600 flex-shrink-0" />
-              <div>
-                <strong>Settings</strong> - App configuration as key-value pairs.
-              </div>
-            </li>
-          </ul>
-          <a
-            href="https://github.com/ZSturman/Production-Scheduling-Web-App/blob/main/docs/SHEETS_TEMPLATE.md"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex items-center gap-2 text-blue-600 hover:text-blue-700 text-sm font-medium"
+      <div className="flex gap-3">
+        {onBack && (
+          <button
+            onClick={onBack}
+            className="btn btn-secondary"
           >
-            View detailed template documentation
-            <ArrowTopRightOnSquareIcon className="h-4 w-4" />
-          </a>
-        </div>
-      )}
+            <ArrowLeftIcon className="h-4 w-4 mr-2" />
+            Back
+          </button>
+        )}
+        <button
+          onClick={onComplete}
+          className="btn btn-primary flex-1"
+        >
+          I have my JSON key file
+          <ArrowRightIcon className="h-4 w-4 ml-2" />
+        </button>
+      </div>
     </div>
   );
 }
@@ -385,7 +453,7 @@ export default function SetupPage() {
   const { orgInfo, loading: dataLoading, refreshOrgInfo } = useData();
   
   const [currentStep, setCurrentStep] = useState<Step>('org');
-  const [sheetsSubStep, setSheetsSubStep] = useState<SheetsSubStep>('service-account');
+  const [sheetsSubStep, setSheetsSubStep] = useState<SheetsSubStep>('enable-api');
   const [submitting, setSubmitting] = useState(false);
   
   // Org step state
@@ -399,10 +467,18 @@ export default function SetupPage() {
     success: boolean;
     spreadsheetName?: string;
     error?: string;
+    troubleshooting?: string[];
   } | null>(null);
   const [validationResult, setValidationResult] = useState<ValidationResult | null>(null);
   const [testing, setTesting] = useState(false);
   const [validating, setValidating] = useState(false);
+  const [initializing, setInitializing] = useState(false);
+  const [initializeResult, setInitializeResult] = useState<{
+    success: boolean;
+    created?: string[];
+    errors?: string[];
+    message?: string;
+  } | null>(null);
   
   // Invite step state
   const [inviteEmail, setInviteEmail] = useState('');
@@ -512,10 +588,21 @@ export default function SetupPage() {
       } else {
         toast.error(response.data.data.error || 'Connection failed');
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error('Failed to test connection:', error);
-      setTestResult({ success: false, error: 'Failed to test connection' });
-      toast.error('Failed to test connection');
+      // Handle error response from API
+      const errorData = error?.response?.data?.error;
+      if (errorData) {
+        setTestResult({ 
+          success: false, 
+          error: errorData.message || 'Connection failed',
+          troubleshooting: errorData.troubleshooting 
+        });
+        toast.error(errorData.message || 'Connection failed');
+      } else {
+        setTestResult({ success: false, error: 'Failed to test connection' });
+        toast.error('Failed to test connection');
+      }
     } finally {
       setTesting(false);
     }
@@ -538,6 +625,50 @@ export default function SetupPage() {
       toast.error('Failed to validate spreadsheet structure');
     } finally {
       setValidating(false);
+    }
+  };
+
+  // Initialize sheets with headers and default data
+  const handleInitializeSheets = async () => {
+    if (!spreadsheetId.trim()) {
+      toast.error('Please enter a spreadsheet ID');
+      return;
+    }
+    if (!serviceAccountJson.trim()) {
+      toast.error('Please upload a service account JSON file');
+      return;
+    }
+
+    setInitializing(true);
+    setInitializeResult(null);
+    
+    try {
+      const response = await configApi.initializeSheets(spreadsheetId.trim(), serviceAccountJson);
+      setInitializeResult(response.data.data);
+      
+      if (response.data.data.success) {
+        toast.success(response.data.data.message || 'Sheets initialized successfully!');
+        // Automatically retest connection and validate after initialization
+        await handleTestConnection();
+      } else {
+        toast.error(response.data.data.message || 'Initialization completed with errors');
+      }
+    } catch (error: any) {
+      console.error('Failed to initialize sheets:', error);
+      const errorData = error?.response?.data?.error;
+      if (errorData) {
+        setInitializeResult({ 
+          success: false, 
+          message: errorData.message || 'Failed to initialize sheets',
+          errors: errorData.troubleshooting || []
+        });
+        toast.error(errorData.message || 'Failed to initialize sheets');
+      } else {
+        setInitializeResult({ success: false, message: 'Failed to initialize sheets' });
+        toast.error('Failed to initialize sheets');
+      }
+    } finally {
+      setInitializing(false);
     }
   };
 
@@ -785,12 +916,20 @@ export default function SetupPage() {
                 </div>
               </div>
 
-              {/* Sub-step 2a: Service Account Guide */}
-              {sheetsSubStep === 'service-account' && (
-                <ServiceAccountGuide onComplete={() => setSheetsSubStep('upload-key')} />
+              {/* Sub-step 2a: Enable Google Sheets API */}
+              {sheetsSubStep === 'enable-api' && (
+                <EnableApiGuide onComplete={() => setSheetsSubStep('service-account')} />
               )}
 
-              {/* Sub-step 2b: Upload JSON Key */}
+              {/* Sub-step 2b: Service Account Guide */}
+              {sheetsSubStep === 'service-account' && (
+                <ServiceAccountGuide 
+                  onComplete={() => setSheetsSubStep('upload-key')} 
+                  onBack={() => setSheetsSubStep('enable-api')}
+                />
+              )}
+
+              {/* Sub-step 2c: Upload JSON Key */}
               {sheetsSubStep === 'upload-key' && (
                 <div className="space-y-4">
                   <div>
@@ -870,7 +1009,7 @@ export default function SetupPage() {
                 </div>
               )}
 
-              {/* Sub-step 2c: Share Spreadsheet */}
+              {/* Sub-step 2d: Share Spreadsheet */}
               {sheetsSubStep === 'share-sheet' && (
                 <div className="space-y-4">
                   <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
@@ -892,7 +1031,16 @@ export default function SetupPage() {
                     </ol>
                   </div>
 
-                  <SpreadsheetStructureInfo />
+                  <div className="bg-gray-50 border border-gray-200 rounded-lg p-4">
+                    <div className="flex items-start gap-2">
+                      <InformationCircleIcon className="h-5 w-5 text-gray-500 flex-shrink-0 mt-0.5" />
+                      <p className="text-sm text-gray-600">
+                        Don&apos;t have a spreadsheet yet? No problem! In the next step, 
+                        you can connect any Google Spreadsheet and we&apos;ll help you 
+                        set up the required structure automatically.
+                      </p>
+                    </div>
+                  </div>
 
                   <div className="flex gap-3">
                     <button
@@ -913,7 +1061,7 @@ export default function SetupPage() {
                 </div>
               )}
 
-              {/* Sub-step 2d: Connect & Validate */}
+              {/* Sub-step 2e: Connect & Validate */}
               {sheetsSubStep === 'connect' && (
                 <div className="space-y-4">
                   <div>
@@ -956,12 +1104,25 @@ export default function SetupPage() {
                       ) : (
                         <div className="flex items-start gap-2 text-red-800">
                           <ExclamationCircleIcon className="h-5 w-5 text-red-600 flex-shrink-0 mt-0.5" />
-                          <div>
+                          <div className="flex-1">
                             <p className="font-medium">Connection failed</p>
                             <p className="text-sm mt-1">{testResult.error}</p>
-                            <p className="text-sm mt-2">
-                              Make sure you&apos;ve shared the spreadsheet with: <strong>{serviceAccountEmail}</strong>
-                            </p>
+                            {testResult.troubleshooting && testResult.troubleshooting.length > 0 && (
+                              <div className="mt-3">
+                                <p className="text-sm font-medium mb-2">Troubleshooting steps:</p>
+                                <ul className="text-sm space-y-1 list-disc list-inside">
+                                  {testResult.troubleshooting.map((step, idx) => (
+                                    <li key={idx}>{step}</li>
+                                  ))}
+                                </ul>
+                              </div>
+                            )}
+                            {serviceAccountEmail && (
+                              <div className="mt-3 p-2 bg-red-100 rounded text-xs">
+                                <p className="font-medium mb-1">Service account email:</p>
+                                <p className="font-mono break-all">{serviceAccountEmail}</p>
+                              </div>
+                            )}
                           </div>
                         </div>
                       )}
@@ -970,10 +1131,80 @@ export default function SetupPage() {
 
                   {/* Validation Results */}
                   {validationResult && testResult?.success && (
-                    <ValidationResults 
-                      result={validationResult} 
-                      onRetry={handleValidateStructure}
-                    />
+                    <div className="space-y-4">
+                      <ValidationResults 
+                        result={validationResult} 
+                        onRetry={handleValidateStructure}
+                      />
+                      
+                      {/* Show auto-create option only if there are issues that need fixing */}
+                      {(!validationResult.valid || validationResult.issues.some(i => i.severity === 'error')) && (
+                        <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                          <div className="flex items-start gap-3">
+                            <TableCellsIcon className="h-6 w-6 text-blue-600 flex-shrink-0" />
+                            <div className="flex-1">
+                              <p className="text-blue-900 font-medium">Need help setting up your spreadsheet?</p>
+                              <p className="text-sm text-blue-800 mt-1">
+                                We can automatically create the required sheets with proper headers and default data.
+                              </p>
+                              <button
+                                onClick={handleInitializeSheets}
+                                disabled={initializing}
+                                className="btn btn-primary mt-3"
+                              >
+                                {initializing ? (
+                                  <>
+                                    <div className="spinner mr-2" />
+                                    Creating sheets...
+                                  </>
+                                ) : (
+                                  <>
+                                    <TableCellsIcon className="h-5 w-5 mr-2" />
+                                    Automatically Create Missing Sheets
+                                  </>
+                                )}
+                              </button>
+                              {initializeResult && (
+                                <div className={`mt-3 p-3 rounded-lg ${
+                                  initializeResult.success ? 'bg-green-50 border border-green-200' : 'bg-yellow-50 border border-yellow-200'
+                                }`}>
+                                  <p className={`text-sm font-medium ${
+                                    initializeResult.success ? 'text-green-800' : 'text-yellow-800'
+                                  }`}>
+                                    {initializeResult.message}
+                                  </p>
+                                  {initializeResult.created && initializeResult.created.length > 0 && (
+                                    <p className="text-xs text-green-700 mt-1">
+                                      Created: {initializeResult.created.join(', ')}
+                                    </p>
+                                  )}
+                                  {initializeResult.errors && initializeResult.errors.length > 0 && (
+                                    <div className="text-xs text-yellow-700 mt-2">
+                                      <p className="font-medium">Errors:</p>
+                                      <ul className="list-disc list-inside mt-1">
+                                        {initializeResult.errors.map((error, idx) => (
+                                          <li key={idx}>{error}</li>
+                                        ))}
+                                      </ul>
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                      
+                      {/* Show success message when everything is valid */}
+                      {validationResult.valid && validationResult.canProceed && (
+                        <div className="bg-green-50 border border-green-200 rounded-lg p-4">
+                          <div className="flex items-center gap-2 text-green-800">
+                            <CheckCircleIcon className="h-5 w-5 text-green-600" />
+                            <span className="font-medium">Spreadsheet structure verified! You&apos;re ready to continue.</span>
+                          </div>
+                        </div>
+                      )}
+                    </div>
                   )}
 
                   <div className="flex gap-3">

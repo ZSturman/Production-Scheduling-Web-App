@@ -18,6 +18,8 @@ import {
 } from '@heroicons/react/24/outline';
 import { useAuth } from '@/contexts/AuthContext';
 import { useData } from '@/contexts/DataContext';
+import SheetHealthBanner from '@/components/SheetHealthBanner';
+import { GuidedTour } from '@/components/GuidedTour';
 
 const navigation = [
   { name: 'Dashboard', href: '/dashboard', icon: HomeIcon },
@@ -253,9 +255,15 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
 
         {/* Page content */}
         <main className="p-4 lg:p-6">
+          {/* Sheets health banner */}
+          <SheetHealthBanner className="mb-4" />
+          
           {children}
         </main>
       </div>
+
+      {/* Guided Tour - shows on first visit */}
+      <GuidedTour />
     </div>
   );
 }

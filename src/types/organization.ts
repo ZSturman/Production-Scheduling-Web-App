@@ -111,6 +111,7 @@ export interface TestGoogleSheetsResponse {
   spreadsheetName?: string;
   sheetNames?: string[];
   error?: string;
+  troubleshooting?: string[];
 }
 
 export interface OrgContext {

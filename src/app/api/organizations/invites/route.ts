@@ -35,7 +35,7 @@ export const GET = withOrg(async (request, context) => {
       .where('status', '==', 'pending')
       .get();
 
-    const invites: Invite[] = invitesSnapshot.docs.map(doc => ({
+    const invites: Invite[] = invitesSnapshot.docs.map((doc: any) => ({
       id: doc.id,
       ...doc.data(),
     })) as Invite[];

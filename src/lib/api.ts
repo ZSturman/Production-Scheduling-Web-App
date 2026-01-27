@@ -128,10 +128,22 @@ export const configApi = {
     api.post('/config/google-sheets/test', { spreadsheetId, serviceAccountJson }),
   validateGoogleSheets: (spreadsheetId: string, serviceAccountJson: string) => 
     api.post('/config/google-sheets/validate', { spreadsheetId, serviceAccountJson }),
+  initializeSheets: (spreadsheetId: string, serviceAccountJson: string) => 
+    api.post('/config/google-sheets/initialize', { spreadsheetId, serviceAccountJson }),
   saveGoogleSheets: (spreadsheetId: string, serviceAccountJson: string) => 
     api.post('/config/google-sheets/save', { spreadsheetId, serviceAccountJson }),
   deleteGoogleSheets: () => 
     api.delete('/config/google-sheets'),
+};
+
+// Sheets Health API
+export const sheetsHealthApi = {
+  check: () => 
+    api.get('/sheets/health'),
+  fixMissingSheets: () => 
+    api.post('/sheets/health', { action: 'fix-missing-sheets' }),
+  fixMissingHeaders: (sheetName: string) => 
+    api.post('/sheets/health', { action: 'fix-missing-headers', sheetName }),
 };
 
 // Re-export type aliases for convenience

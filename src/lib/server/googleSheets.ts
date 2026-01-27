@@ -3,6 +3,8 @@ import CryptoJS from 'crypto-js';
 import type { Product, WorkCenter, WeeklySchedule, TimeRange } from '@/types';
 import { DEFAULT_WEEKLY_SCHEDULE } from '@/types/workCenter';
 import { getServiceAccountCredentials, getGoogleSheetsConfig } from './firestoreService';
+import type { SheetIssue, SheetIssueCode, SheetsHealth, SheetsHealthStatus } from '@/types/settings';
+import { PRODUCTION_SCHEDULING_TEMPLATE, DEFAULT_WORK_CENTERS, DEFAULT_HOLIDAYS } from '@/lib/sheetsTemplates';
 
 // Sheet names
 export const SHEET_NAMES = {
@@ -88,21 +90,34 @@ export class GoogleSheetsService {
       let auth;
       
       if (this.serviceAccountCredentials) {
-        const credentials = JSON.parse(this.serviceAccountCredentials);
+        console.log('Parsing service account credentials...');
+        let credentials;
+        try {
+          credentials = JSON.parse(this.serviceAccountCredentials);
+          console.log('Service account email:', credentials.client_email);
+        } catch (parseError) {
+          console.error('Failed to parse service account JSON:', parseError);
+          throw new Error('Invalid service account JSON format');
+        }
+        
         auth = new google.auth.GoogleAuth({
           credentials,
           scopes: ['https://www.googleapis.com/auth/spreadsheets'],
         });
       } else {
+        console.log('Using default Google Auth (no credentials provided)');
         auth = new google.auth.GoogleAuth({
           scopes: ['https://www.googleapis.com/auth/spreadsheets'],
         });
       }
 
       this.sheets = google.sheets({ version: 'v4', auth });
+      console.log('Google Sheets client created successfully');
       return this.sheets;
     } catch (error) {
-      throw new Error(`Failed to connect to Google Sheets: ${error}`);
+      console.error('Failed to create Google Sheets client:', error);
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      throw new Error(`Failed to connect to Google Sheets: ${errorMessage}`);
     }
   }
 
@@ -138,15 +153,393 @@ export class GoogleSheetsService {
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
-  async testConnection(): Promise<boolean> {
+  // ============================================================================
+  // Error Parsing & Sheet Issue Creation
+  // ============================================================================
+
+  parseGoogleApiError(error: unknown, context?: { sheetName?: string; operation?: string }): SheetIssue {
+    const errorObj = error as { code?: number; message?: string; errors?: Array<{ reason?: string; message?: string }> };
+    const code = errorObj.code;
+    const message = errorObj.message || String(error);
+    const errorReason = errorObj.errors?.[0]?.reason;
+
+    // Parse specific error types
+    if (message.includes('Unable to parse range') || message.includes('range not found')) {
+      return {
+        code: 'SHEET_NOT_FOUND',
+        severity: 'error',
+        sheetName: context?.sheetName,
+        message: `Sheet "${context?.sheetName || 'Unknown'}" does not exist in the spreadsheet.`,
+        userAction: 'The sheet may have been deleted or renamed. An administrator can recreate the missing sheet.',
+        adminRequired: true,
+      };
+    }
+
+    if (code === 403 || errorReason === 'forbidden') {
+      return {
+        code: 'PERMISSION_DENIED',
+        severity: 'error',
+        message: 'Access denied to the spreadsheet.',
+        userAction: 'Make sure the service account email has been granted Editor access to the spreadsheet.',
+        adminRequired: true,
+      };
+    }
+
+    if (code === 404 || message.includes('Requested entity was not found')) {
+      return {
+        code: 'SPREADSHEET_NOT_FOUND',
+        severity: 'error',
+        message: 'The spreadsheet could not be found.',
+        userAction: 'Verify the spreadsheet ID is correct and the spreadsheet has not been deleted.',
+        adminRequired: true,
+      };
+    }
+
+    if (code === 429 || message.includes('Quota exceeded') || message.includes('Rate Limit')) {
+      return {
+        code: 'RATE_LIMITED',
+        severity: 'warning',
+        message: 'Google Sheets API rate limit reached.',
+        userAction: 'Please wait a moment and try again. The system will automatically retry.',
+        adminRequired: false,
+      };
+    }
+
+    if (message.includes('API has not been used') || message.includes('API disabled') || message.includes('sheets.googleapis.com')) {
+      return {
+        code: 'API_DISABLED',
+        severity: 'error',
+        message: 'The Google Sheets API is not enabled for this project.',
+        userAction: 'Enable the Google Sheets API in the Google Cloud Console for your project.',
+        adminRequired: true,
+      };
+    }
+
+    if (message.includes('invalid_grant') || message.includes('Invalid JWT') || message.includes('credentials')) {
+      return {
+        code: 'INVALID_CREDENTIALS',
+        severity: 'error',
+        message: 'The service account credentials are invalid or expired.',
+        userAction: 'Re-upload valid service account credentials.',
+        adminRequired: true,
+      };
+    }
+
+    // Generic error
+    return {
+      code: 'UNKNOWN_ERROR',
+      severity: 'error',
+      sheetName: context?.sheetName,
+      message: `An error occurred: ${message}`,
+      userAction: 'Please try again. If the problem persists, contact support.',
+      adminRequired: false,
+      details: { originalError: message, operation: context?.operation },
+    };
+  }
+
+  // ============================================================================
+  // Safe Sheet Operations (return issues instead of throwing)
+  // ============================================================================
+
+  async safeGetSheetData(sheetName: string): Promise<{ data: string[][] | null; issue: SheetIssue | null }> {
+    try {
+      const data = await this.getSheetData(sheetName);
+      return { data, issue: null };
+    } catch (error) {
+      return { data: null, issue: this.parseGoogleApiError(error, { sheetName, operation: 'getSheetData' }) };
+    }
+  }
+
+  async validateSheetHealth(): Promise<SheetsHealth> {
+    const issues: SheetIssue[] = [];
+    const sheetStatuses: SheetsHealth['sheets'] = [];
+    
+    try {
+      // First, check if we can connect and get spreadsheet info
+      const info = await this.getSpreadsheetInfo();
+      const existingSheets = new Set(info.sheets);
+
+      // Check each expected sheet from the template
+      for (const sheetConfig of PRODUCTION_SCHEDULING_TEMPLATE.sheets) {
+        const sheetName = sheetConfig.name;
+        const exists = existingSheets.has(sheetName);
+        const requiredHeaders = sheetConfig.columns.filter(c => c.required).map(c => c.label);
+        
+        if (!exists) {
+          issues.push({
+            code: 'SHEET_NOT_FOUND',
+            severity: 'error',
+            sheetName,
+            message: `Required sheet "${sheetName}" is missing from the spreadsheet.`,
+            userAction: 'Create the missing sheet or use the "Fix Issues" button to automatically create it.',
+            adminRequired: true,
+          });
+          
+          sheetStatuses.push({
+            name: sheetName,
+            exists: false,
+            hasRequiredHeaders: false,
+            missingHeaders: requiredHeaders,
+            extraHeaders: [],
+          });
+          continue;
+        }
+
+        // Sheet exists, check headers
+        const { data, issue } = await this.safeGetSheetData(sheetName);
+        
+        if (issue) {
+          issues.push(issue);
+          sheetStatuses.push({
+            name: sheetName,
+            exists: true,
+            hasRequiredHeaders: false,
+            missingHeaders: requiredHeaders,
+            extraHeaders: [],
+          });
+          continue;
+        }
+
+        const headers = data?.[0] || [];
+        const expectedHeaders = sheetConfig.columns.map(c => c.label);
+        const missingHeaders = requiredHeaders.filter(h => !headers.includes(h));
+        const extraHeaders = headers.filter(h => !expectedHeaders.includes(h) && h.trim() !== '');
+
+        if (missingHeaders.length > 0) {
+          issues.push({
+            code: 'MISSING_REQUIRED_HEADER',
+            severity: 'error',
+            sheetName,
+            message: `Sheet "${sheetName}" is missing required columns: ${missingHeaders.join(', ')}`,
+            userAction: 'Add the missing columns or use the "Fix Issues" button to automatically add them.',
+            adminRequired: true,
+            details: { missingHeaders },
+          });
+        }
+
+        sheetStatuses.push({
+          name: sheetName,
+          exists: true,
+          hasRequiredHeaders: missingHeaders.length === 0,
+          missingHeaders,
+          extraHeaders,
+        });
+      }
+
+      // Determine overall status
+      let status: SheetsHealthStatus = 'healthy';
+      if (issues.some(i => i.severity === 'error')) {
+        status = 'error';
+      } else if (issues.some(i => i.severity === 'warning')) {
+        status = 'degraded';
+      }
+
+      return {
+        status,
+        issues,
+        lastChecked: new Date().toISOString(),
+        sheets: sheetStatuses,
+      };
+    } catch (error) {
+      // Connection-level failure
+      const issue = this.parseGoogleApiError(error, { operation: 'validateSheetHealth' });
+      return {
+        status: 'error',
+        issues: [issue],
+        lastChecked: new Date().toISOString(),
+        sheets: [],
+      };
+    }
+  }
+
+  // ============================================================================
+  // Sheet Rename Operations
+  // ============================================================================
+
+  async renameSheet(oldName: string, newName: string): Promise<{ success: boolean; issue?: SheetIssue }> {
     try {
       const sheets = await this.getClient();
-      await sheets.spreadsheets.get({
+      
+      // First get the sheet ID by name
+      const spreadsheet = await sheets.spreadsheets.get({
+        spreadsheetId: this.spreadsheetId,
+        fields: 'sheets.properties',
+      });
+
+      const sheet = spreadsheet.data.sheets?.find(s => s.properties?.title === oldName);
+      if (!sheet?.properties?.sheetId) {
+        return {
+          success: false,
+          issue: {
+            code: 'SHEET_NOT_FOUND',
+            severity: 'error',
+            sheetName: oldName,
+            message: `Sheet "${oldName}" not found`,
+            userAction: 'The sheet may have already been renamed or deleted.',
+            adminRequired: true,
+          },
+        };
+      }
+
+      await sheets.spreadsheets.batchUpdate({
+        spreadsheetId: this.spreadsheetId,
+        requestBody: {
+          requests: [{
+            updateSheetProperties: {
+              properties: {
+                sheetId: sheet.properties.sheetId,
+                title: newName,
+              },
+              fields: 'title',
+            },
+          }],
+        },
+      });
+
+      return { success: true };
+    } catch (error) {
+      return {
+        success: false,
+        issue: this.parseGoogleApiError(error, { sheetName: oldName, operation: 'renameSheet' }),
+      };
+    }
+  }
+
+  async updateSheetHeaders(sheetName: string, newHeaders: string[]): Promise<{ success: boolean; issue?: SheetIssue }> {
+    try {
+      await this.updateSheetData(`${sheetName}!A1:${this.columnToLetter(newHeaders.length)}1`, [newHeaders]);
+      return { success: true };
+    } catch (error) {
+      return {
+        success: false,
+        issue: this.parseGoogleApiError(error, { sheetName, operation: 'updateSheetHeaders' }),
+      };
+    }
+  }
+
+  private columnToLetter(column: number): string {
+    let result = '';
+    let temp = column;
+    while (temp > 0) {
+      temp--;
+      result = String.fromCharCode(65 + (temp % 26)) + result;
+      temp = Math.floor(temp / 26);
+    }
+    return result;
+  }
+
+  // ============================================================================
+  // Auto-fix Operations
+  // ============================================================================
+
+  async fixMissingSheets(): Promise<{ fixed: string[]; errors: SheetIssue[] }> {
+    const fixed: string[] = [];
+    const errors: SheetIssue[] = [];
+
+    try {
+      const info = await this.getSpreadsheetInfo();
+      const existingSheets = new Set(info.sheets);
+
+      for (const sheetConfig of PRODUCTION_SCHEDULING_TEMPLATE.sheets) {
+        const sheetName = sheetConfig.name;
+        
+        if (!existingSheets.has(sheetName)) {
+          try {
+            await this.createSheet(sheetName);
+            
+            // Set up headers and default data
+            const headers = sheetConfig.columns.map(c => c.label);
+            await this.updateSheetData(`${sheetName}!A1:${this.columnToLetter(headers.length)}1`, [headers]);
+            
+            // Add default data for specific sheets
+            if (sheetName === SHEET_NAMES.WORK_CENTERS) {
+              await this.updateSheetData(
+                `${sheetName}!A2:S${DEFAULT_WORK_CENTERS.length + 1}`,
+                DEFAULT_WORK_CENTERS as (string | number | boolean | null)[][]
+              );
+            } else if (sheetName === SHEET_NAMES.HOLIDAYS) {
+              await this.updateSheetData(
+                `${sheetName}!A2:C${DEFAULT_HOLIDAYS.length + 1}`,
+                DEFAULT_HOLIDAYS as (string | number | boolean | null)[][]
+              );
+            } else if (sheetName === SHEET_NAMES.SETTINGS) {
+              const defaultSettings = [
+                ['atRiskBufferDays', '2'],
+                ['syncIntervalSeconds', '60'],
+                ['defaultPriorityPosition', 'end'],
+              ];
+              await this.updateSheetData(`${sheetName}!A2:B4`, defaultSettings);
+            }
+            
+            fixed.push(sheetName);
+          } catch (error) {
+            errors.push(this.parseGoogleApiError(error, { sheetName, operation: 'createSheet' }));
+          }
+        }
+      }
+
+      return { fixed, errors };
+    } catch (error) {
+      errors.push(this.parseGoogleApiError(error, { operation: 'fixMissingSheets' }));
+      return { fixed, errors };
+    }
+  }
+
+  async fixMissingHeaders(sheetName: string): Promise<{ success: boolean; issue?: SheetIssue }> {
+    try {
+      const sheetConfig = PRODUCTION_SCHEDULING_TEMPLATE.sheets.find(s => s.name === sheetName);
+      if (!sheetConfig) {
+        return {
+          success: false,
+          issue: {
+            code: 'UNKNOWN_ERROR',
+            severity: 'error',
+            sheetName,
+            message: `No template configuration found for sheet "${sheetName}"`,
+            userAction: 'Contact support.',
+            adminRequired: true,
+          },
+        };
+      }
+
+      const { data, issue } = await this.safeGetSheetData(sheetName);
+      if (issue) {
+        return { success: false, issue };
+      }
+
+      const existingHeaders = data?.[0] || [];
+      const expectedHeaders = sheetConfig.columns.map(c => c.label);
+      
+      // Merge: keep existing headers in place, add missing ones at the end
+      const newHeaders = [...existingHeaders];
+      for (const header of expectedHeaders) {
+        if (!existingHeaders.includes(header)) {
+          newHeaders.push(header);
+        }
+      }
+
+      return await this.updateSheetHeaders(sheetName, newHeaders);
+    } catch (error) {
+      return {
+        success: false,
+        issue: this.parseGoogleApiError(error, { sheetName, operation: 'fixMissingHeaders' }),
+      };
+    }
+  }
+
+  async testConnection(): Promise<boolean> {
+    try {
+      console.log('Testing connection to Google Sheets with ID:', this.spreadsheetId);
+
+      const sheets = await this.getClient();
+      const response = await sheets.spreadsheets.get({
         spreadsheetId: this.spreadsheetId,
         fields: 'properties.title',
       });
+      console.log('Successfully connected to spreadsheet:', response.data.properties?.title);
       return true;
-    } catch {
+    } catch (error) {
+      console.error('Test connection failed:', error);
       return false;
     }
   }
@@ -430,16 +823,107 @@ export class GoogleSheetsService {
   }
 
   async getSpreadsheetInfo(): Promise<{ title: string; sheets: string[] }> {
-    const sheets = await this.getClient();
-    const response = await sheets.spreadsheets.get({
-      spreadsheetId: this.spreadsheetId,
-      fields: 'properties.title,sheets.properties.title',
-    });
+    return this.withRetry(async () => {
+      const sheets = await this.getClient();
+      const response = await sheets.spreadsheets.get({
+        spreadsheetId: this.spreadsheetId,
+        fields: 'properties.title,sheets.properties.title',
+      });
 
-    const title = response.data.properties?.title || 'Unknown';
-    const sheetNames = response.data.sheets?.map(s => s.properties?.title || '') || [];
+      const title = response.data.properties?.title || 'Unknown';
+      const sheetNames = response.data.sheets?.map(s => s.properties?.title || '') || [];
 
-    return { title, sheets: sheetNames };
+      return { title, sheets: sheetNames };
+    }, 'getSpreadsheetInfo');
+  }
+
+  async createSheet(sheetName: string): Promise<void> {
+    return this.withRetry(async () => {
+      const sheets = await this.getClient();
+      await sheets.spreadsheets.batchUpdate({
+        spreadsheetId: this.spreadsheetId,
+        requestBody: {
+          requests: [{
+            addSheet: {
+              properties: {
+                title: sheetName,
+              },
+            },
+          }],
+        },
+      });
+    }, `createSheet(${sheetName})`);
+  }
+
+  async setupProductsSheet(): Promise<void> {
+    const sheetConfig = PRODUCTION_SCHEDULING_TEMPLATE.sheets.find(s => s.key === 'products');
+    const headers = sheetConfig?.columns.map(c => c.label) || [
+      'Job Number', 'Customer', 'Product Text', 'Balance Quantity', 
+      'Requested Ship Date', 'Work Center', 'Priority', 'UPH', 
+      'Setup Time (hrs)', 'Ends Type', 'Scheduled Start', 'Scheduled End', 
+      'Schedule Status', 'Schedule Locked', 'Lock Reason', 'Priority Updated At', 'Notes'
+    ];
+    await this.updateSheetData(`${SHEET_NAMES.PRODUCTS}!A1:${this.columnToLetter(headers.length)}1`, [headers]);
+  }
+
+  async setupWorkCentersSheet(): Promise<void> {
+    const sheetConfig = PRODUCTION_SCHEDULING_TEMPLATE.sheets.find(s => s.key === 'workCenters');
+    const headers = sheetConfig?.columns.map(c => c.label) || [
+      'ID', 'Name', 'Type', 'Active', 'Default UPH',
+      'Mon Start', 'Mon End', 'Tue Start', 'Tue End',
+      'Wed Start', 'Wed End', 'Thu Start', 'Thu End',
+      'Fri Start', 'Fri End', 'Sat Start', 'Sat End',
+      'Sun Start', 'Sun End'
+    ];
+    await this.updateSheetData(`${SHEET_NAMES.WORK_CENTERS}!A1:S${DEFAULT_WORK_CENTERS.length + 1}`, [headers, ...DEFAULT_WORK_CENTERS] as (string | number | boolean | null)[][]);
+  }
+
+  async setupHolidaysSheet(): Promise<void> {
+    const sheetConfig = PRODUCTION_SCHEDULING_TEMPLATE.sheets.find(s => s.key === 'holidays');
+    const headers = sheetConfig?.columns.map(c => c.label) || ['Date', 'Name', 'Affected Work Centers'];
+    await this.updateSheetData(`${SHEET_NAMES.HOLIDAYS}!A1:C${DEFAULT_HOLIDAYS.length + 1}`, [headers, ...DEFAULT_HOLIDAYS] as (string | number | boolean | null)[][]);
+  }
+
+  async setupSettingsSheet(): Promise<void> {
+    const sheetConfig = PRODUCTION_SCHEDULING_TEMPLATE.sheets.find(s => s.key === 'settings');
+    const headers = sheetConfig?.columns.map(c => c.label) || ['Setting', 'Value'];
+    const defaultSettings = [
+      ['atRiskBufferDays', '2'],
+      ['syncIntervalSeconds', '60'],
+      ['defaultPriorityPosition', 'end'],
+    ];
+    await this.updateSheetData(`${SHEET_NAMES.SETTINGS}!A1:B4`, [headers, ...defaultSettings]);
+  }
+
+  async initializeAllSheets(): Promise<{ created: string[]; errors: string[] }> {
+    const created: string[] = [];
+    const errors: string[] = [];
+
+    // Get existing sheets
+    const info = await this.getSpreadsheetInfo();
+    const existingSheets = new Set(info.sheets);
+
+    // Define sheets to create with their setup functions
+    const sheetsToSetup = [
+      { name: SHEET_NAMES.PRODUCTS, setup: () => this.setupProductsSheet() },
+      { name: SHEET_NAMES.WORK_CENTERS, setup: () => this.setupWorkCentersSheet() },
+      { name: SHEET_NAMES.HOLIDAYS, setup: () => this.setupHolidaysSheet() },
+      { name: SHEET_NAMES.SETTINGS, setup: () => this.setupSettingsSheet() },
+    ];
+
+    for (const { name, setup } of sheetsToSetup) {
+      try {
+        if (!existingSheets.has(name)) {
+          await this.createSheet(name);
+          created.push(name);
+        }
+        await setup();
+      } catch (error) {
+        errors.push(`${name}: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      }
+    }
+
+    return { created, errors };
   }
 }
 

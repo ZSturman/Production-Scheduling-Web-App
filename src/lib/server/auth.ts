@@ -144,6 +144,63 @@ async function getGoogleSheetsConfig(orgId: string): Promise<GoogleSheetsConfig 
 }
 
 /**
+ * Result of authentication verification
+ */
+export interface AuthResult {
+  authenticated: boolean;
+  user: (AuthenticatedUser & { organizationId?: string }) | null;
+  org: OrgContext | null;
+}
+
+/**
+ * Verify authentication for a request and return auth info
+ * Unlike withAuth, this doesn't wrap a handler - it just returns the result
+ */
+export async function verifyAuth(request: NextRequest): Promise<AuthResult> {
+  const decodedToken = await verifyToken(request);
+  
+  if (!decodedToken) {
+    return { authenticated: false, user: null, org: null };
+  }
+
+  // Build user object
+  const user: AuthenticatedUser & { organizationId?: string } = {
+    uid: decodedToken.uid,
+    email: decodedToken.email || '',
+    displayName: decodedToken.name || null,
+    photoURL: decodedToken.picture || null,
+    role: getUserRole(decodedToken),
+    orgId: (decodedToken.orgId as string) || null,
+  };
+
+  // Try to find user's organization
+  let org: OrgContext | null = null;
+  const userOrg = await findUserOrganization(user.uid);
+  
+  if (userOrg) {
+    user.role = userOrg.role;
+    user.orgId = userOrg.orgId;
+    user.orgName = userOrg.orgName;
+    user.organizationId = userOrg.orgId; // Alias for convenience
+
+    // Load Google Sheets config if configured
+    let googleSheetsConfig: GoogleSheetsConfig | null = null;
+    if (userOrg.configStatus === 'configured') {
+      googleSheetsConfig = await getGoogleSheetsConfig(userOrg.orgId);
+    }
+
+    org = {
+      orgId: userOrg.orgId,
+      orgName: userOrg.orgName,
+      configStatus: userOrg.configStatus,
+      googleSheetsConfig,
+    };
+  }
+
+  return { authenticated: true, user, org };
+}
+
+/**
  * Wrapper for authenticated API routes
  */
 export function withAuth(handler: AuthenticatedHandler) {
