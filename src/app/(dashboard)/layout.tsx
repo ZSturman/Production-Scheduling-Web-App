@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, Fragment, ReactNode } from 'react';
+import { useEffect, useState, Fragment, ReactNode, useCallback } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import Link from 'next/link';
 import Image from 'next/image';
@@ -18,6 +18,12 @@ import {
 } from '@heroicons/react/24/outline';
 import { useAuth } from '@/contexts/AuthContext';
 import { useData } from '@/contexts/DataContext';
+import SheetHealthBanner from '@/components/SheetHealthBanner';
+import { GuidedTour } from '@/components/GuidedTour';
+import SheetsWizardModal from '@/components/sheets-wizard/SheetsWizardModal';
+import type { WizardConfig } from '@/components/sheets-wizard/SheetsWizard';
+import { configApi } from '@/lib/api';
+import toast from 'react-hot-toast';
 
 const navigation = [
   { name: 'Dashboard', href: '/dashboard', icon: HomeIcon },
@@ -44,9 +50,26 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
     triggerSync, 
     recalculateSchedule, 
     lockedJobsAffected, 
-    clearLockedJobsNotification 
+    clearLockedJobsNotification,
+    sheetsHealth,
+    refreshSheetsHealth,
+    refreshAll,
   } = useData();
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [showSheetsWizard, setShowSheetsWizard] = useState(false);
+  const [wizardCheckDone, setWizardCheckDone] = useState(false);
+  const [templateId, setTemplateId] = useState<string | undefined>(undefined);
+
+  // Fetch templateId from google sheets config
+  useEffect(() => {
+    if (orgConfigured) {
+      configApi.getGoogleSheets().then((response) => {
+        if (response.data?.config?.templateId) {
+          setTemplateId(response.data.config.templateId);
+        }
+      }).catch(console.error);
+    }
+  }, [orgConfigured]);
 
   // Auth check
   useEffect(() => {
@@ -64,10 +87,49 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
     }
   }, [user, authLoading, dataLoading, orgInfo, orgConfigured, router]);
 
+  // Check if sheets need configuration (template not selected yet)
+  useEffect(() => {
+    if (!authLoading && !dataLoading && orgConfigured && !wizardCheckDone) {
+      // Check sheets health - if status is 'unconfigured' or has missing sheets, show wizard
+      if (sheetsHealth?.status === 'unconfigured' || 
+          sheetsHealth?.issues?.some(i => i.code === 'SHEET_NOT_FOUND')) {
+        setShowSheetsWizard(true);
+      }
+      setWizardCheckDone(true);
+    }
+  }, [authLoading, dataLoading, orgConfigured, sheetsHealth, wizardCheckDone]);
+
   const handleSignOut = async () => {
     await signOut();
     router.replace('/login');
   };
+
+  // Handle wizard completion
+  const handleWizardComplete = useCallback(async (config: WizardConfig) => {
+    try {
+      const response = await fetch('/api/config/google-sheets/apply-changes', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(config),
+      });
+      
+      if (!response.ok) {
+        const data = await response.json();
+        throw new Error(data.error?.message || 'Failed to apply configuration');
+      }
+      
+      toast.success('Google Sheets configured successfully!');
+      setShowSheetsWizard(false);
+      
+      // Refresh data
+      await refreshSheetsHealth();
+      await refreshAll();
+    } catch (error) {
+      console.error('Error applying wizard config:', error);
+      toast.error(error instanceof Error ? error.message : 'Failed to configure sheets');
+      throw error;
+    }
+  }, [refreshSheetsHealth, refreshAll]);
 
   if (authLoading || dataLoading || !user || !orgConfigured) {
     return (
@@ -84,7 +146,9 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
         <div className="fixed inset-0 bg-gray-600 bg-opacity-75" onClick={() => setSidebarOpen(false)} />
         <div className="fixed inset-y-0 left-0 flex w-64 flex-col bg-white">
           <div className="flex h-16 items-center justify-between px-4">
-            <span className="text-xl font-bold text-gray-900">📅 Scheduler</span>
+            <span className="text-xl font-bold text-gray-900 truncate">
+              {orgInfo?.organization?.name || '📅 Scheduler'}
+            </span>
             <button onClick={() => setSidebarOpen(false)} className="text-gray-500">
               <XMarkIcon className="h-6 w-6" />
             </button>
@@ -114,12 +178,14 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
       </div>
 
       {/* Desktop sidebar */}
-      <div className="hidden lg:fixed lg:inset-y-0 lg:flex lg:w-64 lg:flex-col">
+      <div className="hidden lg:fixed lg:inset-y-0 lg:flex lg:w-64 lg:flex-col" data-tour="sidebar">
         <div className="flex min-h-0 flex-1 flex-col bg-white border-r border-gray-200">
           <div className="flex h-16 items-center px-4 border-b border-gray-200">
-            <span className="text-xl font-bold text-gray-900">📅 Scheduler</span>
+            <span className="text-xl font-bold text-gray-900 truncate">
+              {orgInfo?.organization?.name || '📅 Scheduler'}
+            </span>
           </div>
-          <nav className="flex-1 space-y-1 px-2 py-4">
+          <nav className="flex-1 space-y-1 px-2 py-4" data-tour="navigation">
             {navigation.map((item) => {
               const isActive = pathname === item.href || pathname.startsWith(item.href + '/');
               return (
@@ -140,11 +206,8 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
             })}
           </nav>
           
-          {/* Role and org indicator */}
+          {/* Role indicator */}
           <div className="border-t border-gray-200 p-4">
-            <div className="text-xs text-gray-500 mb-2 truncate">
-              {orgInfo?.organization?.name}
-            </div>
             <div className="flex items-center">
               <span className={classNames(
                 'px-2 py-1 text-xs font-medium rounded-full',
@@ -253,9 +316,24 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
 
         {/* Page content */}
         <main className="p-4 lg:p-6">
+          {/* Sheets health banner */}
+          <SheetHealthBanner className="mb-4" />
+          
           {children}
         </main>
       </div>
+
+      {/* Sheets Wizard Modal - shows when sheets need configuration */}
+      <SheetsWizardModal
+        isOpen={showSheetsWizard}
+        onClose={() => setShowSheetsWizard(false)}
+        sheetsHealth={sheetsHealth}
+        onComplete={handleWizardComplete}
+        required={sheetsHealth?.status === 'unconfigured'}
+      />
+
+      {/* Guided Tour - shows on first visit */}
+      <GuidedTour templateId={templateId} />
     </div>
   );
 }

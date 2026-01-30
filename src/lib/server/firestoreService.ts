@@ -1,4 +1,5 @@
-import { admin, getFirestore } from './firebase-admin';
+import { getFirestore } from './firebase-admin';
+import { FieldValue } from 'firebase-admin/firestore';
 import { decrypt, encrypt, getEncryptionKeyVersion, validateServiceAccountJson } from './crypto';
 import type {
   Organization,
@@ -7,6 +8,7 @@ import type {
   EncryptedCredentials,
   OrganizationInvite,
   OrgConfigStatus,
+  SheetNamesConfig,
 } from '@/types/organization';
 import type { UserRole } from '@/types/enums';
 
@@ -22,6 +24,7 @@ const COLLECTIONS = {
 const CONFIG_DOCS = {
   googleSheets: 'googleSheets',
   googleServiceAccount: 'googleServiceAccount',
+  sheetNames: 'sheetNames',
 } as const;
 
 // ============================================================================
@@ -116,7 +119,7 @@ export async function addOrganizationMember(
 
   batch.set(db.collection(COLLECTIONS.members(orgId)).doc(member.uid), member);
   batch.update(db.collection(COLLECTIONS.organizations).doc(orgId), {
-    memberCount: admin.firestore.FieldValue.increment(1),
+    memberCount: FieldValue.increment(1),
   });
 
   await batch.commit();
@@ -363,7 +366,7 @@ export async function acceptInvite(
 
     transaction.update(
       db.collection(COLLECTIONS.organizations).doc(invite.orgId),
-      { memberCount: admin.firestore.FieldValue.increment(1) }
+      { memberCount: FieldValue.increment(1) }
     );
   });
 
@@ -383,4 +386,77 @@ export async function getOrganizationInvites(orgId: string): Promise<Organizatio
     .get();
 
   return snapshot.docs.map((doc) => doc.data() as OrganizationInvite);
+}
+
+// ============================================================================
+// Sheet Names Configuration
+// ============================================================================
+
+const DEFAULT_SHEET_NAMES: SheetNamesConfig = {
+  products: 'Products',
+  workCenters: 'Work Centers',
+  holidays: 'Holidays',
+  settings: 'Settings',
+  auditLog: '_AuditLog',
+  syncMetadata: '_SyncMetadata',
+};
+
+export async function getSheetNamesConfig(orgId: string): Promise<SheetNamesConfig> {
+  const db = getFirestore();
+  
+  // First check if custom names are stored in the googleSheets config
+  const gsConfig = await getGoogleSheetsConfig(orgId);
+  if (gsConfig?.sheetNames) {
+    return { ...DEFAULT_SHEET_NAMES, ...gsConfig.sheetNames };
+  }
+  
+  // Check for separate sheetNames doc (legacy support)
+  const doc = await db
+    .collection(COLLECTIONS.config(orgId))
+    .doc(CONFIG_DOCS.sheetNames)
+    .get();
+
+  if (!doc.exists) {
+    return DEFAULT_SHEET_NAMES;
+  }
+
+  return { ...DEFAULT_SHEET_NAMES, ...(doc.data() as Partial<SheetNamesConfig>) };
+}
+
+export async function saveSheetNamesConfig(
+  orgId: string,
+  sheetNames: Partial<SheetNamesConfig>
+): Promise<void> {
+  const db = getFirestore();
+  
+  // Get current Google Sheets config
+  const gsConfig = await getGoogleSheetsConfig(orgId);
+  if (!gsConfig) {
+    throw new Error('Google Sheets not configured for this organization');
+  }
+  
+  // Update the googleSheets config with the new sheet names
+  const updatedConfig: GoogleSheetsConfig = {
+    ...gsConfig,
+    sheetNames: { ...DEFAULT_SHEET_NAMES, ...gsConfig.sheetNames, ...sheetNames },
+  };
+  
+  await db
+    .collection(COLLECTIONS.config(orgId))
+    .doc(CONFIG_DOCS.googleSheets)
+    .set(updatedConfig);
+}
+
+// ============================================================================
+// Member Activity Tracking
+// ============================================================================
+
+export async function updateMemberLastLogin(
+  orgId: string,
+  uid: string
+): Promise<void> {
+  const db = getFirestore();
+  await db.collection(COLLECTIONS.members(orgId)).doc(uid).update({
+    lastLogin: new Date().toISOString(),
+  });
 }

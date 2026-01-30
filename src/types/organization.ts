@@ -19,6 +19,7 @@ export interface OrganizationMember {
   role: UserRole;
   joinedAt: string;
   invitedBy: string | null;
+  lastLogin?: string;
 }
 
 export interface GoogleSheetsConfig {
@@ -28,6 +29,23 @@ export interface GoogleSheetsConfig {
   configured: boolean;
   lastValidated: string | null;
   lastValidationError: string | null;
+  // Dynamic sheet names (custom names override defaults)
+  sheetNames?: SheetNamesConfig;
+  // Template info
+  templateId?: string;
+  // Additional fields for config UI
+  lastUpdated?: string;
+  configHistory?: { timestamp?: string; reason?: string }[];
+}
+
+// Configuration for custom sheet names
+export interface SheetNamesConfig {
+  products: string;
+  workCenters: string;
+  holidays: string;
+  settings: string;
+  auditLog?: string;
+  syncMetadata?: string;
 }
 
 export interface EncryptedCredentials {
@@ -111,6 +129,7 @@ export interface TestGoogleSheetsResponse {
   spreadsheetName?: string;
   sheetNames?: string[];
   error?: string;
+  troubleshooting?: string[];
 }
 
 export interface OrgContext {

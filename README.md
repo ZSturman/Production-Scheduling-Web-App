@@ -109,13 +109,29 @@ Set these in the Cloud Run console or via CLI:
 
 ## Google Sheets Setup
 
-Create a Google Sheet with these tabs:
-- **Products** - Production job data
-- **WorkCenters** - Manufacturing work centers and schedules
-- **Holidays** - Company holidays
-- **Settings** - Application settings (optional)
+### Prerequisites
 
-See [SHEETS_TEMPLATE.md](docs/SHEETS_TEMPLATE.md) for column requirements.
+1. **Enable Google Sheets API** in your Google Cloud project:
+   - Go to [Google Cloud Console](https://console.cloud.google.com/)
+   - Navigate to **APIs & Services** > **Library**
+   - Search for "Google Sheets API" and click **Enable**
+   - ⚠️ **This step is REQUIRED** - the service account won't work without it!
+
+2. **Create a Service Account**:
+   - Go to **IAM & Admin** > **Service Accounts**
+   - Create a new service account with Editor role
+   - Download the JSON key file
+
+3. **Create and Share Google Sheet**:
+   - Create a Google Sheet with these tabs:
+     - **Products** - Production job data
+     - **WorkCenters** - Manufacturing work centers and schedules
+     - **Holidays** - Company holidays
+     - **Settings** - Application settings (optional)
+   - Share the sheet with your service account email (from JSON file)
+   - Grant Editor access
+
+See [SHEETS_TEMPLATE.md](docs/SHEETS_TEMPLATE.md) for detailed setup instructions and column requirements.
 
 ## Development
 

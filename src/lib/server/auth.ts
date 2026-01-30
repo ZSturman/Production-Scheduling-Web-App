@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getAuth, getFirestore, admin } from './firebase-admin';
+import { getAuth, getFirestore } from './firebase-admin';
+import type { DecodedIdToken } from 'firebase-admin/auth';
 import type { UserRole } from '@/types/enums';
 import type { User, OrgContext, GoogleSheetsConfig } from '@/types/organization';
 
@@ -35,7 +36,7 @@ export type AuthenticatedHandler = (
 /**
  * Extract and verify Firebase token from request
  */
-async function verifyToken(request: NextRequest): Promise<admin.auth.DecodedIdToken | null> {
+async function verifyToken(request: NextRequest): Promise<DecodedIdToken | null> {
   const authHeader = request.headers.get('authorization');
   
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
@@ -45,7 +46,8 @@ async function verifyToken(request: NextRequest): Promise<admin.auth.DecodedIdTo
   const token = authHeader.split('Bearer ')[1];
   
   try {
-    const auth = getAuth();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const auth = getAuth() as any;
     return await auth.verifyIdToken(token);
   } catch {
     return null;
@@ -55,7 +57,7 @@ async function verifyToken(request: NextRequest): Promise<admin.auth.DecodedIdTo
 /**
  * Get user role from custom claims
  */
-function getUserRole(decodedToken: admin.auth.DecodedIdToken): UserRole {
+function getUserRole(decodedToken: DecodedIdToken): UserRole {
   if (decodedToken.role === 'admin') return 'admin';
   if (decodedToken.role === 'planner') return 'planner';
   if (decodedToken.planner === true) return 'planner';
@@ -75,11 +77,29 @@ async function findUserOrganization(uid: string): Promise<{
   const db = getFirestore();
   
   // Use collection group query to find user across all member subcollections
-  const memberQuery = await db
-    .collectionGroup('members')
-    .where('uid', '==', uid)
-    .limit(1)
-    .get();
+  let memberQuery;
+  try {
+    memberQuery = await db
+      .collectionGroup('members')
+      .where('uid', '==', uid)
+      .limit(1)
+      .get();
+  } catch (error: unknown) {
+    const firestoreError = error as { code?: number; message?: string };
+    // Handle FAILED_PRECONDITION (code 9) - missing index
+    if (firestoreError.code === 9) {
+      console.error(
+        'Firestore index missing for collection group query on "members.uid".\n' +
+        'To fix this, either:\n' +
+        '1. Run: firebase deploy --only firestore:indexes\n' +
+        '2. Or create the index manually in Firebase Console:\n' +
+        '   - Collection group: members\n' +
+        '   - Field: uid (Ascending)\n' +
+        '   - Query scope: Collection group\n'
+      );
+    }
+    throw error;
+  }
 
   if (memberQuery.empty) {
     return null;
@@ -123,6 +143,63 @@ async function getGoogleSheetsConfig(orgId: string): Promise<GoogleSheetsConfig 
   }
 
   return doc.data() as GoogleSheetsConfig;
+}
+
+/**
+ * Result of authentication verification
+ */
+export interface AuthResult {
+  authenticated: boolean;
+  user: (AuthenticatedUser & { organizationId?: string }) | null;
+  org: OrgContext | null;
+}
+
+/**
+ * Verify authentication for a request and return auth info
+ * Unlike withAuth, this doesn't wrap a handler - it just returns the result
+ */
+export async function verifyAuth(request: NextRequest): Promise<AuthResult> {
+  const decodedToken = await verifyToken(request);
+  
+  if (!decodedToken) {
+    return { authenticated: false, user: null, org: null };
+  }
+
+  // Build user object
+  const user: AuthenticatedUser & { organizationId?: string } = {
+    uid: decodedToken.uid,
+    email: decodedToken.email || '',
+    displayName: decodedToken.name || null,
+    photoURL: decodedToken.picture || null,
+    role: getUserRole(decodedToken),
+    orgId: (decodedToken.orgId as string) || null,
+  };
+
+  // Try to find user's organization
+  let org: OrgContext | null = null;
+  const userOrg = await findUserOrganization(user.uid);
+  
+  if (userOrg) {
+    user.role = userOrg.role;
+    user.orgId = userOrg.orgId;
+    user.orgName = userOrg.orgName;
+    user.organizationId = userOrg.orgId; // Alias for convenience
+
+    // Load Google Sheets config if configured
+    let googleSheetsConfig: GoogleSheetsConfig | null = null;
+    if (userOrg.configStatus === 'configured') {
+      googleSheetsConfig = await getGoogleSheetsConfig(userOrg.orgId);
+    }
+
+    org = {
+      orgId: userOrg.orgId,
+      orgName: userOrg.orgName,
+      configStatus: userOrg.configStatus,
+      googleSheetsConfig,
+    };
+  }
+
+  return { authenticated: true, user, org };
 }
 
 /**
@@ -260,7 +337,8 @@ export async function setUserCustomClaims(
   uid: string,
   claims: { orgId?: string; role?: UserRole }
 ): Promise<void> {
-  const auth = getAuth();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const auth = getAuth() as any;
   const user = await auth.getUser(uid);
   const existingClaims = user.customClaims || {};
 

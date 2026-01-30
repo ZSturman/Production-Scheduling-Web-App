@@ -1,9 +1,10 @@
 'use client';
 
-import { createContext, useContext, useState, useEffect, useCallback, ReactNode } from 'react';
+import { createContext, useContext, useState, useEffect, useCallback, ReactNode, useRef } from 'react';
 import toast from 'react-hot-toast';
-import { productsApi, workCentersApi, scheduleApi, syncApi, settingsApi, organizationsApi } from '@/lib/api';
+import { productsApi, workCentersApi, scheduleApi, syncApi, settingsApi, organizationsApi, sheetsHealthApi } from '@/lib/api';
 import { useAuth } from './AuthContext';
+import type { SheetsHealth, SheetIssue } from '@/types/settings';
 
 // Types (simplified versions of shared types)
 interface Product {
@@ -112,12 +113,15 @@ interface DataContextType {
   settings: Settings | null;
   summary: ScheduleSummary | null;
   orgInfo: OrgInfo | null;
+  sheetsHealth: SheetsHealth | null;
   
   // Loading states
   loading: boolean;
   syncing: boolean;
   recalculating: boolean;
   orgConfigured: boolean;
+  sheetsHealthy: boolean;
+  syncPaused: boolean;
   
   // Notifications
   lockedJobsAffected: number;
@@ -129,6 +133,7 @@ interface DataContextType {
   refreshSummary: () => Promise<void>;
   refreshSettings: () => Promise<void>;
   refreshOrgInfo: () => Promise<void>;
+  refreshSheetsHealth: () => Promise<void>;
   refreshAll: () => Promise<void>;
   
   // Product actions
@@ -143,6 +148,14 @@ interface DataContextType {
   
   // Settings actions
   updateSettings: (data: Partial<Settings>) => Promise<void>;
+  
+  // Sheets health actions
+  fixMissingSheets: () => Promise<void>;
+  fixMissingHeaders: (sheetName: string) => Promise<void>;
+  
+  // Sync control - pause during user actions
+  pauseSync: () => void;
+  resumeSync: () => void;
   
   // Clear notification
   clearLockedJobsNotification: () => void;
@@ -160,17 +173,36 @@ export function DataProvider({ children }: { children: ReactNode }) {
   const [settings, setSettings] = useState<Settings | null>(null);
   const [summary, setSummary] = useState<ScheduleSummary | null>(null);
   const [orgInfo, setOrgInfo] = useState<OrgInfo | null>(null);
+  const [sheetsHealth, setSheetsHealth] = useState<SheetsHealth | null>(null);
   
   // Loading states
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [recalculating, setRecalculating] = useState(false);
   
+  // Sync pause state - prevents automatic polling during user actions
+  const [syncPaused, setSyncPaused] = useState(false);
+  const syncPausedRef = useRef(false); // Ref for use in callbacks without causing re-renders
+  
   // Notifications
   const [lockedJobsAffected, setLockedJobsAffected] = useState(0);
 
   // Check if org is configured
   const orgConfigured = orgInfo?.googleSheetsConfigured ?? false;
+  
+  // Check if sheets are healthy (can load data)
+  const sheetsHealthy = sheetsHealth?.status === 'healthy' || sheetsHealth?.status === 'degraded';
+
+  // Sync control functions - call these when user starts/ends interactions
+  const pauseSync = useCallback(() => {
+    setSyncPaused(true);
+    syncPausedRef.current = true;
+  }, []);
+
+  const resumeSync = useCallback(() => {
+    setSyncPaused(false);
+    syncPausedRef.current = false;
+  }, []);
 
   // Refresh functions
   const refreshOrgInfo = useCallback(async () => {
@@ -188,6 +220,25 @@ export function DataProvider({ children }: { children: ReactNode }) {
     }
   }, [user]);
 
+  const refreshSheetsHealth = useCallback(async () => {
+    if (!orgConfigured) return;
+    try {
+      const response = await sheetsHealthApi.check();
+      setSheetsHealth(response.data.data);
+      
+      // Show toast for critical issues
+      const health = response.data.data as SheetsHealth;
+      if (health.status === 'error' && health.issues.length > 0) {
+        const criticalIssue = health.issues.find(i => i.severity === 'error');
+        if (criticalIssue) {
+          toast.error(criticalIssue.message, { duration: 6000 });
+        }
+      }
+    } catch (error) {
+      console.error('Failed to check sheets health:', error);
+    }
+  }, [orgConfigured]);
+
   const refreshProducts = useCallback(async () => {
     if (!orgConfigured) return;
     try {
@@ -195,9 +246,16 @@ export function DataProvider({ children }: { children: ReactNode }) {
       setProducts(response.data.data.products);
     } catch (error) {
       console.error('Failed to fetch products:', error);
-      toast.error('Failed to load products');
+      // Check if this is a sheets-related error
+      const axiosError = error as { response?: { data?: { error?: { code?: string } } } };
+      if (axiosError.response?.data?.error?.code === 'SHEETS_ERROR') {
+        // Refresh health to get the actual issue
+        refreshSheetsHealth();
+      } else {
+        toast.error('Failed to load products');
+      }
     }
-  }, [orgConfigured]);
+  }, [orgConfigured, refreshSheetsHealth]);
 
   const refreshWorkCenters = useCallback(async () => {
     if (!orgConfigured) return;
@@ -242,23 +300,30 @@ export function DataProvider({ children }: { children: ReactNode }) {
   }, [orgConfigured]);
 
   const refreshAll = useCallback(async () => {
-    setLoading(true);
+    // Don't set loading=true here - this prevents full UI replacement during refresh
+    // Only set syncing=true to indicate background activity
     try {
       await refreshOrgInfo();
       
       if (orgConfigured) {
-        await Promise.all([
-          refreshProducts(),
-          refreshWorkCenters(),
-          refreshGantt(),
-          refreshSummary(),
-          refreshSettings(),
-        ]);
+        // First check sheets health
+        await refreshSheetsHealth();
+        
+        // Only load data if sheets are healthy
+        if (sheetsHealthy) {
+          await Promise.all([
+            refreshProducts(),
+            refreshWorkCenters(),
+            refreshGantt(),
+            refreshSummary(),
+            refreshSettings(),
+          ]);
+        }
       }
-    } finally {
-      setLoading(false);
+    } catch (error) {
+      console.error('Failed to refresh all:', error);
     }
-  }, [refreshOrgInfo, orgConfigured, refreshProducts, refreshWorkCenters, refreshGantt, refreshSummary, refreshSettings]);
+  }, [refreshOrgInfo, orgConfigured, sheetsHealthy, refreshSheetsHealth, refreshProducts, refreshWorkCenters, refreshGantt, refreshSummary, refreshSettings]);
 
   // Product actions
   const updateProduct = useCallback(async (jobNumber: string, data: Partial<Product>) => {
@@ -363,6 +428,58 @@ export function DataProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  // Sheets health actions
+  const fixMissingSheets = useCallback(async () => {
+    try {
+      const response = await sheetsHealthApi.fixMissingSheets();
+      const result = response.data.data;
+      
+      if (result.fixed.length > 0) {
+        toast.success(`Created missing sheets: ${result.fixed.join(', ')}`);
+      }
+      
+      if (result.errors.length > 0) {
+        toast.error(`Some sheets could not be fixed`);
+      }
+      
+      // Update health state
+      if (result.health) {
+        setSheetsHealth(result.health);
+      }
+      
+      // Refresh all data if sheets are now healthy
+      if (result.health?.status === 'healthy') {
+        await refreshAll();
+      }
+    } catch (error) {
+      console.error('Failed to fix missing sheets:', error);
+      toast.error('Failed to fix missing sheets');
+      throw error;
+    }
+  }, [refreshAll]);
+
+  const fixMissingHeaders = useCallback(async (sheetName: string) => {
+    try {
+      const response = await sheetsHealthApi.fixMissingHeaders(sheetName);
+      const result = response.data.data;
+      
+      if (result.success) {
+        toast.success(`Fixed headers for ${sheetName}`);
+      } else if (result.issue) {
+        toast.error(result.issue.message);
+      }
+      
+      // Update health state
+      if (result.health) {
+        setSheetsHealth(result.health);
+      }
+    } catch (error) {
+      console.error('Failed to fix missing headers:', error);
+      toast.error('Failed to fix headers');
+      throw error;
+    }
+  }, []);
+
   // Clear notification
   const clearLockedJobsNotification = useCallback(() => {
     setLockedJobsAffected(0);
@@ -379,9 +496,16 @@ export function DataProvider({ children }: { children: ReactNode }) {
     }
   }, [user, refreshOrgInfo]);
 
-  // Load data when org is configured
+  // Load sheets health when org is configured
   useEffect(() => {
     if (user && orgConfigured) {
+      refreshSheetsHealth();
+    }
+  }, [user, orgConfigured, refreshSheetsHealth]);
+
+  // Load data when org is configured and sheets are healthy
+  useEffect(() => {
+    if (user && orgConfigured && sheetsHealthy) {
       setLoading(true);
       Promise.all([
         refreshProducts(),
@@ -391,15 +515,18 @@ export function DataProvider({ children }: { children: ReactNode }) {
         refreshSettings(),
       ]).finally(() => setLoading(false));
     }
-  }, [user, orgConfigured, refreshProducts, refreshWorkCenters, refreshGantt, refreshSummary, refreshSettings]);
+  }, [user, orgConfigured, sheetsHealthy, refreshProducts, refreshWorkCenters, refreshGantt, refreshSummary, refreshSettings]);
 
-  // Polling when org is configured
+  // Polling when org is configured - respects syncPaused state
   useEffect(() => {
     if (user && orgConfigured) {
       const pollInterval = (settings?.syncIntervalSeconds || 60) * 1000;
       const intervalId = setInterval(() => {
-        refreshProducts();
-        refreshSummary();
+        // Check the ref to avoid stale closure issues
+        if (!syncPausedRef.current) {
+          refreshProducts();
+          refreshSummary();
+        }
       }, pollInterval);
       
       return () => clearInterval(intervalId);
@@ -413,10 +540,13 @@ export function DataProvider({ children }: { children: ReactNode }) {
     settings,
     summary,
     orgInfo,
+    sheetsHealth,
     loading,
     syncing,
     recalculating,
     orgConfigured,
+    sheetsHealthy,
+    syncPaused,
     lockedJobsAffected,
     refreshProducts,
     refreshWorkCenters,
@@ -424,6 +554,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
     refreshSummary,
     refreshSettings,
     refreshOrgInfo,
+    refreshSheetsHealth,
     refreshAll,
     updateProduct,
     lockProduct,
@@ -432,6 +563,10 @@ export function DataProvider({ children }: { children: ReactNode }) {
     recalculateSchedule,
     triggerSync,
     updateSettings,
+    fixMissingSheets,
+    fixMissingHeaders,
+    pauseSync,
+    resumeSync,
     clearLockedJobsNotification,
   };
 

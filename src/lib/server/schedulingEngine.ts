@@ -11,7 +11,7 @@ import type {
   SchedulingError,
 } from '@/types';
 import { DEFAULT_SETTINGS, holidayAffectsWorkCenter } from '@/types';
-import { GoogleSheetsService, SHEET_NAMES } from './googleSheets';
+import { GoogleSheetsService } from './googleSheets';
 
 interface TimeSlot {
   date: string;
@@ -314,7 +314,8 @@ export class SchedulingEngine {
 
   private async loadHolidays(): Promise<Holiday[]> {
     try {
-      const data = await this.sheetsService.getSheetData(SHEET_NAMES.HOLIDAYS);
+      const sheetNames = this.sheetsService.getSheetNames();
+      const data = await this.sheetsService.getSheetData(sheetNames.HOLIDAYS);
       
       return data.slice(1).map((row, index) => ({
         date: row[0] || '',
