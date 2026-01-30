@@ -228,7 +228,7 @@ export default function ProductsPage() {
       </div>
 
       {/* Table */}
-      <div className="card p-0 overflow-hidden">
+      <div className="card p-0 overflow-hidden" data-tour="products-table">
         <div className="overflow-x-auto">
           <table className="data-table">
             <thead>

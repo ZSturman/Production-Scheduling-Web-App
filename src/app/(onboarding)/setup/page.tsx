@@ -68,7 +68,7 @@ const sheetsSubSteps = [
   { id: 'service-account' as SheetsSubStep, name: 'Create Service Account', icon: KeyIcon },
   { id: 'upload-key' as SheetsSubStep, name: 'Upload Key', icon: DocumentTextIcon },
   { id: 'share-sheet' as SheetsSubStep, name: 'Share Spreadsheet', icon: ShareIcon },
-  { id: 'connect' as SheetsSubStep, name: 'Connect & Validate', icon: LinkIcon },
+  { id: 'connect' as SheetsSubStep, name: 'Connect', icon: LinkIcon },
 ];
 
 // Component for copy-to-clipboard functionality
@@ -577,7 +577,6 @@ export default function SetupPage() {
 
     setTesting(true);
     setTestResult(null);
-    setValidationResult(null);
     
     try {
       const response = await configApi.testGoogleSheets(spreadsheetId.trim(), serviceAccountJson);
@@ -585,8 +584,7 @@ export default function SetupPage() {
       
       if (response.data.data.success) {
         toast.success(`Connected to "${response.data.data.spreadsheetName}"`);
-        // Automatically run validation after successful connection
-        await handleValidateStructure();
+        // Don't auto-validate - sheets will be configured via the SheetsWizard modal on dashboard
       } else {
         toast.error(response.data.data.error || 'Connection failed');
       }
@@ -680,18 +678,14 @@ export default function SetupPage() {
       toast.error('Please test the connection first');
       return;
     }
-    
-    if (validationResult && !validationResult.canProceed) {
-      toast.error('Please fix the required issues before continuing');
-      return;
-    }
 
     setSubmitting(true);
     try {
       await configApi.saveGoogleSheets(spreadsheetId.trim(), serviceAccountJson);
       await refreshOrgInfo();
-      toast.success('Google Sheets configured!');
-      setCurrentStep('complete'); // Go to complete after sheets configured
+      toast.success('Google Sheets connected! Redirecting to dashboard...');
+      // Route directly to dashboard - Configure Sheets modal will appear there if needed
+      router.replace('/dashboard');
     } catch (error) {
       console.error('Failed to save config:', error);
       toast.error('Failed to save configuration');
@@ -1131,81 +1125,19 @@ export default function SetupPage() {
                     </div>
                   )}
 
-                  {/* Validation Results */}
-                  {validationResult && testResult?.success && (
-                    <div className="space-y-4">
-                      <ValidationResults 
-                        result={validationResult} 
-                        onRetry={handleValidateStructure}
-                      />
-                      
-                      {/* Show auto-create option only if there are issues that need fixing */}
-                      {(!validationResult.valid || validationResult.issues.some(i => i.severity === 'error')) && (
-                        <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-                          <div className="flex items-start gap-3">
-                            <TableCellsIcon className="h-6 w-6 text-blue-600 flex-shrink-0" />
-                            <div className="flex-1">
-                              <p className="text-blue-900 font-medium">Need help setting up your spreadsheet?</p>
-                              <p className="text-sm text-blue-800 mt-1">
-                                We can automatically create the required sheets with proper headers and default data.
-                              </p>
-                              <button
-                                onClick={handleInitializeSheets}
-                                disabled={initializing}
-                                className="btn btn-primary mt-3"
-                              >
-                                {initializing ? (
-                                  <>
-                                    <div className="spinner mr-2" />
-                                    Creating sheets...
-                                  </>
-                                ) : (
-                                  <>
-                                    <TableCellsIcon className="h-5 w-5 mr-2" />
-                                    Automatically Create Missing Sheets
-                                  </>
-                                )}
-                              </button>
-                              {initializeResult && (
-                                <div className={`mt-3 p-3 rounded-lg ${
-                                  initializeResult.success ? 'bg-green-50 border border-green-200' : 'bg-yellow-50 border border-yellow-200'
-                                }`}>
-                                  <p className={`text-sm font-medium ${
-                                    initializeResult.success ? 'text-green-800' : 'text-yellow-800'
-                                  }`}>
-                                    {initializeResult.message}
-                                  </p>
-                                  {initializeResult.created && initializeResult.created.length > 0 && (
-                                    <p className="text-xs text-green-700 mt-1">
-                                      Created: {initializeResult.created.join(', ')}
-                                    </p>
-                                  )}
-                                  {initializeResult.errors && initializeResult.errors.length > 0 && (
-                                    <div className="text-xs text-yellow-700 mt-2">
-                                      <p className="font-medium">Errors:</p>
-                                      <ul className="list-disc list-inside mt-1">
-                                        {initializeResult.errors.map((error, idx) => (
-                                          <li key={idx}>{error}</li>
-                                        ))}
-                                      </ul>
-                                    </div>
-                                  )}
-                                </div>
-                              )}
-                            </div>
-                          </div>
+                  {/* Success message when connected */}
+                  {testResult?.success && (
+                    <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                      <div className="flex items-start gap-3">
+                        <InformationCircleIcon className="h-5 w-5 text-blue-600 flex-shrink-0 mt-0.5" />
+                        <div>
+                          <p className="text-blue-900 font-medium">Connection established!</p>
+                          <p className="text-sm text-blue-800 mt-1">
+                            Click &quot;Save & Continue&quot; to proceed. You&apos;ll configure 
+                            your sheet structure and templates on the dashboard.
+                          </p>
                         </div>
-                      )}
-                      
-                      {/* Show success message when everything is valid */}
-                      {validationResult.valid && validationResult.canProceed && (
-                        <div className="bg-green-50 border border-green-200 rounded-lg p-4">
-                          <div className="flex items-center gap-2 text-green-800">
-                            <CheckCircleIcon className="h-5 w-5 text-green-600" />
-                            <span className="font-medium">Spreadsheet structure verified! You&apos;re ready to continue.</span>
-                          </div>
-                        </div>
-                      )}
+                      </div>
                     </div>
                   )}
 
@@ -1219,11 +1151,7 @@ export default function SetupPage() {
                     </button>
                     <button
                       onClick={handleSaveConfig}
-                      disabled={
-                        submitting || 
-                        !testResult?.success || 
-                        (validationResult ? !validationResult.canProceed : false)
-                      }
+                      disabled={submitting || !testResult?.success}
                       className="btn btn-primary flex-1"
                     >
                       {submitting ? 'Saving...' : 'Save & Continue'}

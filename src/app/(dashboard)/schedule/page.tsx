@@ -262,7 +262,7 @@ export default function SchedulePage() {
       </div>
 
       {/* Gantt Chart */}
-      <div className="card p-0 overflow-hidden">
+      <div className="card p-0 overflow-hidden" data-tour="gantt-chart">
         {ganttData.workCenters.length > 0 ? (
           <GanttChart data={ganttData as GanttData} />
         ) : (

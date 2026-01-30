@@ -34,6 +34,7 @@ export const GET = withOrg(async (request, context) => {
       if (currentConfigDoc.exists) {
         const data = currentConfigDoc.data();
         sheetConfig = {
+          templateId: data?.templateId,
           sheetNames: data?.sheets?.reduce((acc: Record<string, string>, s: { key: string; name: string }) => {
             acc[s.key] = s.name;
             return acc;
@@ -51,13 +52,21 @@ export const GET = withOrg(async (request, context) => {
         .limit(10)
         .get();
       
-      configHistory = historySnapshot.docs.map(doc => {
+      interface HistoryDocData {
+        changedAt?: string;
+        configuredAt?: string;
+        reason?: string;
+      }
+      
+      const historyItems: { timestamp: string; reason?: string }[] = [];
+      historySnapshot.docs.forEach((doc: { data: () => HistoryDocData }) => {
         const data = doc.data();
-        return {
-          timestamp: data.changedAt || data.configuredAt,
-          reason: data.reason,
-        };
+        const timestamp = data.changedAt || data.configuredAt;
+        if (timestamp) {
+          historyItems.push({ timestamp, reason: data.reason });
+        }
       });
+      configHistory = historyItems;
     } catch (error) {
       // Ignore errors fetching additional config
       console.error('Error fetching sheet config:', error);
@@ -66,6 +75,7 @@ export const GET = withOrg(async (request, context) => {
     const response: GoogleSheetsConfigResponse = {
       config: config ? { 
         ...config,
+        templateId: sheetConfig?.templateId,
         sheetNames: sheetConfig?.sheetNames,
         lastUpdated: sheetConfig?.lastUpdated,
         configHistory,

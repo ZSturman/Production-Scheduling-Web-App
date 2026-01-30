@@ -1,16 +1,17 @@
-import * as admin from 'firebase-admin';
+import { initializeApp, getApps, cert, App, ServiceAccount } from 'firebase-admin/app';
+import { getFirestore as getFirestoreInstance, Firestore } from 'firebase-admin/firestore';
+import { getAuth as getAuthInstance, Auth } from 'firebase-admin/auth';
 import fs from 'fs';
 import path from 'path';
 
 // Initialize Firebase Admin (singleton)
 let initialized = false;
 
-export function initializeFirebaseAdmin(): admin.app.App {
+export function initializeFirebaseAdmin(): App {
   // Check if already initialized
-  try {
-    return admin.app();
-  } catch {
-    // App not initialized yet, proceed with initialization
+  const apps = getApps();
+  if (apps.length > 0) {
+    return apps[0];
   }
 
   // Check for service account from environment
@@ -19,7 +20,7 @@ export function initializeFirebaseAdmin(): admin.app.App {
     process.env.FIREBASE_SERVICE_ACCOUNT_PATH ||
     path.join(process.cwd(), 'service-account.json');
 
-  const loadCredentials = (): admin.ServiceAccount | undefined => {
+  const loadCredentials = (): ServiceAccount | undefined => {
     // Prefer JSON provided via environment variable to avoid file I/O in serverless
     if (serviceAccount) {
       return JSON.parse(serviceAccount);
@@ -41,12 +42,13 @@ export function initializeFirebaseAdmin(): admin.app.App {
   };
 
   const credentials = loadCredentials();
+  let app: App;
 
   if (credentials) {
-    const projectId = credentials.project_id || process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID;
+    const projectId = (credentials as ServiceAccount & { project_id?: string }).project_id || process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID;
 
-    admin.initializeApp({
-      credential: admin.credential.cert(credentials),
+    app = initializeApp({
+      credential: cert(credentials),
       projectId: projectId,
       databaseURL: `https://${projectId}.firebaseio.com`,
     });
@@ -55,7 +57,7 @@ export function initializeFirebaseAdmin(): admin.app.App {
   } else {
     // Use Application Default Credentials (works on Cloud Run automatically)
     const projectId = process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID;
-    admin.initializeApp({
+    app = initializeApp({
       projectId: projectId,
       databaseURL: `https://${projectId}.firebaseio.com`,
     });
@@ -64,20 +66,17 @@ export function initializeFirebaseAdmin(): admin.app.App {
   }
 
   initialized = true;
-  return admin.app();
+  return app;
 }
 
 // Get Firestore instance
-export function getFirestore(): admin.firestore.Firestore {
+export function getFirestore(): Firestore {
   initializeFirebaseAdmin();
-  return admin.firestore();
+  return getFirestoreInstance();
 }
 
 // Get Auth instance
-export function getAuth(): admin.auth.Auth {
+export function getAuth(): Auth {
   initializeFirebaseAdmin();
-  return admin.auth();
+  return getAuthInstance();
 }
-
-// Export admin for direct access if needed
-export { admin };

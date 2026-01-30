@@ -1,4 +1,5 @@
-import { admin, getFirestore } from './firebase-admin';
+import { getFirestore } from './firebase-admin';
+import { FieldValue } from 'firebase-admin/firestore';
 import { decrypt, encrypt, getEncryptionKeyVersion, validateServiceAccountJson } from './crypto';
 import type {
   Organization,
@@ -118,7 +119,7 @@ export async function addOrganizationMember(
 
   batch.set(db.collection(COLLECTIONS.members(orgId)).doc(member.uid), member);
   batch.update(db.collection(COLLECTIONS.organizations).doc(orgId), {
-    memberCount: admin.firestore.FieldValue.increment(1),
+    memberCount: FieldValue.increment(1),
   });
 
   await batch.commit();
@@ -365,7 +366,7 @@ export async function acceptInvite(
 
     transaction.update(
       db.collection(COLLECTIONS.organizations).doc(invite.orgId),
-      { memberCount: admin.firestore.FieldValue.increment(1) }
+      { memberCount: FieldValue.increment(1) }
     );
   });
 

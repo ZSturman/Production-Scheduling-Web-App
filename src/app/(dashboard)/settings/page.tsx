@@ -147,7 +147,7 @@ export default function SettingsPage() {
     if (!historyItem) return;
     
     const confirmed = window.confirm(
-      `Are you sure you want to rollback to the configuration from ${new Date(historyItem.timestamp).toLocaleString()}?\n\nThis will restore the previous sheet names and column settings.`
+      `Are you sure you want to rollback to the configuration from ${new Date(historyItem.changedAt).toLocaleString()}?\n\nThis will restore the previous sheet names and column settings.`
     );
     
     if (!confirmed) return;
@@ -327,7 +327,7 @@ export default function SettingsPage() {
   }
 
   return (
-    <div className="space-y-6 max-w-2xl">
+    <div className="space-y-6 max-w-2xl" data-tour="settings-panel">
       <div>
         <h1 className="text-2xl font-bold text-gray-900">Settings</h1>
         <p className="text-gray-500">Configure scheduling parameters</p>
@@ -583,7 +583,7 @@ export default function SettingsPage() {
               <div className={`rounded-lg p-4 ${
                 sheetsHealth.status === 'healthy' 
                   ? 'bg-green-50 border border-green-200'
-                  : sheetsHealth.status === 'warning'
+                  : sheetsHealth.status === 'degraded'
                   ? 'bg-yellow-50 border border-yellow-200'
                   : 'bg-red-50 border border-red-200'
               }`}>
@@ -596,10 +596,10 @@ export default function SettingsPage() {
                   ) : (
                     <>
                       <ExclamationTriangleIcon className={`h-5 w-5 ${
-                        sheetsHealth.status === 'warning' ? 'text-yellow-600' : 'text-red-600'
+                        sheetsHealth.status === 'degraded' ? 'text-yellow-600' : 'text-red-600'
                       }`} />
                       <span className={`font-medium ${
-                        sheetsHealth.status === 'warning' ? 'text-yellow-800' : 'text-red-800'
+                        sheetsHealth.status === 'degraded' ? 'text-yellow-800' : 'text-red-800'
                       }`}>
                         {sheetsHealth.issues.length} Issue{sheetsHealth.issues.length !== 1 ? 's' : ''} Found
                       </span>
@@ -610,7 +610,7 @@ export default function SettingsPage() {
                   <ul className="text-sm space-y-1 ml-7">
                     {sheetsHealth.issues.slice(0, 3).map((issue, i) => (
                       <li key={i} className={
-                        sheetsHealth.status === 'warning' ? 'text-yellow-700' : 'text-red-700'
+                        sheetsHealth.status === 'degraded' ? 'text-yellow-700' : 'text-red-700'
                       }>
                         {issue.message}
                       </li>
@@ -660,10 +660,10 @@ export default function SettingsPage() {
                     >
                       <div>
                         <span className="text-gray-700">
-                          {new Date(history.timestamp).toLocaleString()}
+                          {new Date(history.changedAt).toLocaleString()}
                         </span>
-                        {history.reason && (
-                          <span className="text-gray-500 ml-2">- {history.reason}</span>
+                        {history.changeReason && (
+                          <span className="text-gray-500 ml-2">- {history.changeReason}</span>
                         )}
                       </div>
                       <button

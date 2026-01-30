@@ -2,6 +2,8 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
+import Tour from '@rc-component/tour';
+import type { TourProps } from '@rc-component/tour';
 import {
   XMarkIcon,
   ArrowRightIcon,
@@ -21,83 +23,85 @@ export interface TourStep {
   icon?: React.ElementType;
   targetPath?: string; // If set, navigates to this path
   targetSelector?: string; // CSS selector to highlight
-  position?: 'center' | 'top' | 'bottom' | 'left' | 'right';
+  position?: 'center' | 'top' | 'bottom' | 'left' | 'right' | 'topLeft' | 'topRight' | 'bottomLeft' | 'bottomRight';
+  // For conditional steps based on template features
+  requiresTemplate?: string | string[];  // Only show if using one of these templates
+  excludeTemplate?: string | string[];   // Hide if using one of these templates
 }
 
-// Types for spotlight positioning
-interface SpotlightRect {
-  top: number;
-  left: number;
-  width: number;
-  height: number;
-}
+// Template feature mappings - what features each template supports
+const TEMPLATE_FEATURES: Record<string, string[]> = {
+  'basic': ['products', 'work-centers', 'schedule'],
+  'standard': ['products', 'work-centers', 'schedule', 'holidays'],
+  'advanced': ['products', 'work-centers', 'schedule', 'holidays', 'audit-log', 'sync-metadata'],
+};
 
 const DEFAULT_TOUR_STEPS: TourStep[] = [
   {
     id: 'welcome',
     title: 'Welcome to Production Scheduler! 🎉',
-    description: 'Let\'s take a quick tour to help you understand how to use the application effectively. This will only take a minute.',
+    description: 'Let\'s take a quick tour to help you get started. This will only take a minute.',
     icon: CheckCircleIcon,
     position: 'center',
   },
   {
-    id: 'dashboard',
-    title: 'Dashboard Overview',
-    description: 'This is your main dashboard. Here you\'ll see a summary of your production schedule, including products at risk and upcoming work.',
-    icon: ChartBarIcon,
+    id: 'navigation',
+    title: 'Navigation',
+    description: 'Use the sidebar to switch between Dashboard, Schedule, Products, Work Centers, and Settings.',
+    icon: ListBulletIcon,
     targetPath: '/dashboard',
-    targetSelector: 'main',
+    targetSelector: '[data-tour="navigation"]',
     position: 'right',
   },
   {
-    id: 'navigation',
-    title: 'Navigation Menu',
-    description: 'Use the sidebar to navigate between different sections: Dashboard, Schedule, Products, Work Centers, and Settings.',
-    icon: ListBulletIcon,
+    id: 'dashboard',
+    title: 'Dashboard',
+    description: 'See your production summary at a glance - products at risk, locked items, and work center status.',
+    icon: ChartBarIcon,
     targetPath: '/dashboard',
-    targetSelector: 'nav',
-    position: 'right',
+    targetSelector: '[data-tour="dashboard-stats"]',
+    position: 'bottom',
   },
   {
     id: 'schedule',
-    title: 'Gantt Chart Schedule',
-    description: 'The Schedule page shows a visual Gantt chart of all your products across work centers. You can see exactly when each job is scheduled to run.',
+    title: 'Gantt Chart',
+    description: 'View your production schedule visually. Drag jobs to reschedule, and see status at a glance.',
     icon: CalendarDaysIcon,
     targetPath: '/schedule',
-    targetSelector: 'main',
-    position: 'right',
+    targetSelector: '[data-tour="gantt-chart"]',
+    position: 'top',
   },
   {
     id: 'products',
     title: 'Product Management',
-    description: 'View and manage all your products here. You can reorder priorities by dragging products, and see their scheduling status at a glance.',
+    description: 'Manage products here. Drag to reorder priorities, lock schedules, and track status.',
     icon: ListBulletIcon,
     targetPath: '/products',
-    targetSelector: 'main',
-    position: 'right',
+    targetSelector: '[data-tour="products-table"]',
+    position: 'top',
   },
   {
     id: 'work-centers',
     title: 'Work Centers',
-    description: 'Work centers define where products are manufactured. Each work center has specific hours of operation that affect scheduling.',
+    description: 'Configure your manufacturing stations and their operating hours.',
     icon: BuildingOfficeIcon,
     targetPath: '/work-centers',
-    targetSelector: 'main',
-    position: 'right',
+    targetSelector: '[data-tour="work-centers-list"]',
+    position: 'top',
   },
   {
     id: 'settings',
-    title: 'Settings & Configuration',
-    description: 'Manage your Google Sheets connection, scheduling parameters, and team members here. Admins can also reconfigure sheets if needed.',
+    title: 'Settings',
+    description: 'Configure sync settings, manage team members, and adjust scheduling parameters.',
     icon: Cog6ToothIcon,
     targetPath: '/settings',
-    targetSelector: 'main',
-    position: 'right',
+    targetSelector: '[data-tour="settings-panel"]',
+    position: 'top',
   },
   {
     id: 'complete',
-    title: 'You\'re All Set!',
-    description: 'That\'s the basics! Your data syncs automatically from Google Sheets. If you ever need help, check the settings page or contact your admin.',
+    title: 'You\'re Ready!',
+    description: 'Your data syncs automatically from Google Sheets. Click Refresh anytime to get the latest data.',
     icon: CheckCircleIcon,
     position: 'center',
   },
@@ -108,6 +112,142 @@ interface GuidedTourProps {
   onComplete?: () => void;
   storageKey?: string;
   forceShow?: boolean;
+  templateId?: string;  // Filter steps based on template
+}
+
+// Helper to filter steps based on template
+function filterStepsByTemplate(steps: TourStep[], templateId?: string): TourStep[] {
+  if (!templateId) return steps;
+  
+  return steps.filter(step => {
+    // Check requiresTemplate - only show if current template matches
+    if (step.requiresTemplate) {
+      const required = Array.isArray(step.requiresTemplate) 
+        ? step.requiresTemplate 
+        : [step.requiresTemplate];
+      if (!required.includes(templateId)) {
+        return false;
+      }
+    }
+    
+    // Check excludeTemplate - hide if current template matches
+    if (step.excludeTemplate) {
+      const excluded = Array.isArray(step.excludeTemplate) 
+        ? step.excludeTemplate 
+        : [step.excludeTemplate];
+      if (excluded.includes(templateId)) {
+        return false;
+      }
+    }
+    
+    return true;
+  });
+}
+
+// Custom tour panel with smaller, cleaner design
+function TourPanel({
+  step,
+  current,
+  total,
+  onPrev,
+  onNext,
+  onClose,
+}: {
+  step: TourStep;
+  current: number;
+  total: number;
+  onPrev: () => void;
+  onNext: () => void;
+  onClose: () => void;
+}) {
+  const Icon = step.icon;
+  const isFirst = current === 0;
+  const isLast = current === total - 1;
+
+  return (
+    <div className="bg-white rounded-lg shadow-xl max-w-xs w-full border border-gray-200 overflow-hidden">
+      {/* Progress bar */}
+      <div className="h-1 bg-gray-100">
+        <div 
+          className="h-full bg-blue-600 transition-all duration-300"
+          style={{ width: `${((current + 1) / total) * 100}%` }}
+        />
+      </div>
+      
+      <div className="p-4">
+        {/* Header with icon */}
+        <div className="flex items-start gap-3 mb-2">
+          {Icon && (
+            <div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center flex-shrink-0">
+              <Icon className="h-4 w-4 text-blue-600" />
+            </div>
+          )}
+          <div className="flex-1 min-w-0">
+            <h4 className="text-sm font-semibold text-gray-900">{step.title}</h4>
+          </div>
+          <button
+            onClick={onClose}
+            className="text-gray-400 hover:text-gray-600 -mt-1 -mr-1"
+          >
+            <XMarkIcon className="h-4 w-4" />
+          </button>
+        </div>
+
+        {/* Description */}
+        <p className="text-sm text-gray-600 mb-3">{step.description}</p>
+
+        {/* Step indicator dots */}
+        <div className="flex justify-center gap-1 mb-3">
+          {Array.from({ length: total }, (_, i) => (
+            <span
+              key={i}
+              className={`w-1.5 h-1.5 rounded-full transition-colors ${
+                i === current ? 'bg-blue-600' : i < current ? 'bg-blue-300' : 'bg-gray-200'
+              }`}
+            />
+          ))}
+        </div>
+
+        {/* Actions */}
+        <div className="flex items-center justify-between">
+          <button
+            onClick={onClose}
+            className="text-xs text-gray-500 hover:text-gray-700"
+          >
+            Skip
+          </button>
+          
+          <div className="flex gap-2">
+            {!isFirst && (
+              <button
+                onClick={onPrev}
+                className="inline-flex items-center px-2 py-1 text-xs font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded transition-colors"
+              >
+                <ArrowLeftIcon className="h-3 w-3 mr-1" />
+                Back
+              </button>
+            )}
+            <button
+              onClick={onNext}
+              className="inline-flex items-center px-3 py-1 text-xs font-medium text-white bg-blue-600 hover:bg-blue-700 rounded transition-colors"
+            >
+              {isLast ? (
+                <>
+                  Done
+                  <CheckCircleIcon className="h-3 w-3 ml-1" />
+                </>
+              ) : (
+                <>
+                  Next
+                  <ArrowRightIcon className="h-3 w-3 ml-1" />
+                </>
+              )}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 export function GuidedTour({
@@ -115,327 +255,166 @@ export function GuidedTour({
   onComplete,
   storageKey = 'production-scheduler-tour-completed',
   forceShow = false,
+  templateId,
 }: GuidedTourProps) {
   const router = useRouter();
   const pathname = usePathname();
+  
+  // Filter steps based on template
+  const filteredSteps = filterStepsByTemplate(steps, templateId);
   const [currentStepIndex, setCurrentStepIndex] = useState(0);
-  const [isVisible, setIsVisible] = useState(false);
-  const [isNavigating, setIsNavigating] = useState(false);
-  const [spotlightRect, setSpotlightRect] = useState<SpotlightRect | null>(null);
-  const [tooltipPosition, setTooltipPosition] = useState<{ top: number; left: number } | null>(null);
-  const tooltipRef = useRef<HTMLDivElement>(null);
+  const [isOpen, setIsOpen] = useState(false);
+  const [targetElement, setTargetElement] = useState<HTMLElement | null>(null);
+  const navigationTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
-  const currentStep = steps[currentStepIndex];
-  const isFirstStep = currentStepIndex === 0;
-  const isLastStep = currentStepIndex === steps.length - 1;
+  const currentStep = filteredSteps[currentStepIndex];
 
-  // Calculate spotlight position for target element
-  const updateSpotlight = useCallback(() => {
-    if (!currentStep.targetSelector) {
-      setSpotlightRect(null);
-      setTooltipPosition(null);
-      return;
-    }
-
-    const element = document.querySelector(currentStep.targetSelector);
-    if (!element) {
-      setSpotlightRect(null);
-      setTooltipPosition(null);
-      return;
-    }
-
-    const rect = element.getBoundingClientRect();
-    const padding = 8;
-    
-    setSpotlightRect({
-      top: rect.top - padding,
-      left: rect.left - padding,
-      width: rect.width + padding * 2,
-      height: rect.height + padding * 2,
-    });
-
-    // Position tooltip based on step position preference
-    const tooltipWidth = 400;
-    const tooltipHeight = 250;
-    let top = 0;
-    let left = 0;
-
-    switch (currentStep.position) {
-      case 'right':
-        top = Math.max(20, rect.top);
-        left = Math.min(rect.right + 20, window.innerWidth - tooltipWidth - 20);
-        break;
-      case 'left':
-        top = Math.max(20, rect.top);
-        left = Math.max(20, rect.left - tooltipWidth - 20);
-        break;
-      case 'bottom':
-        top = Math.min(rect.bottom + 20, window.innerHeight - tooltipHeight - 20);
-        left = Math.max(20, rect.left);
-        break;
-      case 'top':
-        top = Math.max(20, rect.top - tooltipHeight - 20);
-        left = Math.max(20, rect.left);
-        break;
-      default:
-        // center
-        top = window.innerHeight / 2 - tooltipHeight / 2;
-        left = window.innerWidth / 2 - tooltipWidth / 2;
-    }
-
-    setTooltipPosition({ top, left });
-  }, [currentStep]);
-
-  // Update spotlight when step changes or window resizes
+  // Find and set target element
   useEffect(() => {
-    if (!isVisible) return;
-    
-    // Delay to allow DOM to update after navigation
-    const timer = setTimeout(updateSpotlight, 300);
-    
-    window.addEventListener('resize', updateSpotlight);
-    return () => {
-      clearTimeout(timer);
-      window.removeEventListener('resize', updateSpotlight);
-    };
-  }, [isVisible, currentStepIndex, updateSpotlight, pathname]);
+    if (!isOpen || !currentStep?.targetSelector) {
+      setTargetElement(null);
+      return;
+    }
+
+    // Wait a bit for DOM to be ready after navigation
+    const timer = setTimeout(() => {
+      const element = document.querySelector(currentStep.targetSelector!) as HTMLElement;
+      setTargetElement(element || null);
+    }, 300);
+
+    return () => clearTimeout(timer);
+  }, [isOpen, currentStep, pathname]);
 
   // Check if tour should be shown
   useEffect(() => {
     if (forceShow) {
-      setIsVisible(true);
+      setIsOpen(true);
       return;
     }
 
     const tourCompleted = localStorage.getItem(storageKey);
     if (!tourCompleted) {
-      setIsVisible(true);
+      // Small delay to let the page render first
+      setTimeout(() => setIsOpen(true), 500);
     }
   }, [storageKey, forceShow]);
 
-  // Handle navigation to target path
+  // Navigate to step's target path if needed
   useEffect(() => {
-    if (isNavigating && currentStep.targetPath && pathname !== currentStep.targetPath) {
+    if (!isOpen || !currentStep) return;
+    
+    if (currentStep.targetPath && pathname !== currentStep.targetPath) {
       router.push(currentStep.targetPath);
     }
-    // Small delay to allow navigation
-    const timer = setTimeout(() => setIsNavigating(false), 500);
-    return () => clearTimeout(timer);
-  }, [isNavigating, currentStep.targetPath, pathname, router]);
+  }, [isOpen, currentStep, pathname, router]);
 
   const handleNext = useCallback(() => {
-    if (isLastStep) {
+    if (currentStepIndex === filteredSteps.length - 1) {
       handleComplete();
     } else {
-      const nextStep = steps[currentStepIndex + 1];
-      if (nextStep.targetPath && pathname !== nextStep.targetPath) {
-        setIsNavigating(true);
-      }
-      setCurrentStepIndex((prev) => prev + 1);
+      setCurrentStepIndex(prev => prev + 1);
     }
-  }, [isLastStep, currentStepIndex, steps, pathname]);
+  }, [currentStepIndex, filteredSteps.length]);
 
-  const handlePrevious = useCallback(() => {
-    if (!isFirstStep) {
-      const prevStep = steps[currentStepIndex - 1];
-      if (prevStep.targetPath && pathname !== prevStep.targetPath) {
-        setIsNavigating(true);
-      }
-      setCurrentStepIndex((prev) => prev - 1);
+  const handlePrev = useCallback(() => {
+    if (currentStepIndex > 0) {
+      setCurrentStepIndex(prev => prev - 1);
     }
-  }, [isFirstStep, currentStepIndex, steps, pathname]);
-
-  const handleSkip = useCallback(() => {
-    handleComplete();
-  }, []);
+  }, [currentStepIndex]);
 
   const handleComplete = useCallback(() => {
     localStorage.setItem(storageKey, 'true');
-    setIsVisible(false);
+    setIsOpen(false);
     onComplete?.();
-    // Navigate to dashboard if not there
+    
     if (pathname !== '/dashboard') {
       router.push('/dashboard');
     }
   }, [storageKey, onComplete, pathname, router]);
 
-  // Handle keyboard navigation
+  const handleClose = useCallback(() => {
+    handleComplete();
+  }, [handleComplete]);
+
+  // Cleanup
   useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (!isVisible) return;
-      
-      if (e.key === 'Escape') {
-        handleSkip();
-      } else if (e.key === 'ArrowRight' || e.key === 'Enter') {
-        handleNext();
-      } else if (e.key === 'ArrowLeft') {
-        handlePrevious();
+    return () => {
+      if (navigationTimeoutRef.current) {
+        clearTimeout(navigationTimeoutRef.current);
       }
     };
+  }, []);
 
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isVisible, handleNext, handlePrevious, handleSkip]);
-
-  if (!isVisible) {
+  if (!isOpen || !currentStep) {
     return null;
   }
 
-  const Icon = currentStep.icon;
-  const isCentered = !spotlightRect || currentStep.position === 'center';
+  // Map position to rc-component/tour placement
+  const getPlacement = (): TourProps['placement'] => {
+    switch (currentStep.position) {
+      case 'top': return 'top';
+      case 'bottom': return 'bottom';
+      case 'left': return 'left';
+      case 'right': return 'right';
+      case 'topLeft': return 'topLeft';
+      case 'topRight': return 'topRight';
+      case 'bottomLeft': return 'bottomLeft';
+      case 'bottomRight': return 'bottomRight';
+      default: return 'bottom';
+    }
+  };
+
+  // For centered steps (no target), show a simple modal
+  if (!targetElement || currentStep.position === 'center') {
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center">
+        <div className="absolute inset-0 bg-black/40" onClick={handleClose} />
+        <div className="relative z-10">
+          <TourPanel
+            step={currentStep}
+            current={currentStepIndex}
+            total={filteredSteps.length}
+            onPrev={handlePrev}
+            onNext={handleNext}
+            onClose={handleClose}
+          />
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <div className="fixed inset-0 z-50">
-      {/* Backdrop with spotlight cutout */}
-      {spotlightRect ? (
-        <svg className="absolute inset-0 w-full h-full" onClick={handleSkip}>
-          <defs>
-            <mask id="spotlight-mask">
-              <rect x="0" y="0" width="100%" height="100%" fill="white" />
-              <rect
-                x={spotlightRect.left}
-                y={spotlightRect.top}
-                width={spotlightRect.width}
-                height={spotlightRect.height}
-                rx="8"
-                fill="black"
-              />
-            </mask>
-          </defs>
-          <rect
-            x="0"
-            y="0"
-            width="100%"
-            height="100%"
-            fill="rgba(0, 0, 0, 0.5)"
-            mask="url(#spotlight-mask)"
-          />
-        </svg>
-      ) : (
-        <div 
-          className="absolute inset-0 bg-black/40"
-          onClick={handleSkip}
+    <Tour
+      open={isOpen}
+      onClose={handleClose}
+      current={0}
+      steps={[{
+        target: () => targetElement,
+        title: currentStep.title,
+        description: currentStep.description,
+        placement: getPlacement(),
+      }]}
+      renderPanel={() => (
+        <TourPanel
+          step={currentStep}
+          current={currentStepIndex}
+          total={filteredSteps.length}
+          onPrev={handlePrev}
+          onNext={handleNext}
+          onClose={handleClose}
         />
       )}
-
-      {/* Spotlight border highlight */}
-      {spotlightRect && (
-        <div
-          className="absolute border-2 border-blue-500 rounded-lg pointer-events-none animate-pulse"
-          style={{
-            top: spotlightRect.top,
-            left: spotlightRect.left,
-            width: spotlightRect.width,
-            height: spotlightRect.height,
-          }}
-        />
-      )}
-
-      {/* Tour Card - positioned based on spotlight or centered */}
-      <div
-        ref={tooltipRef}
-        className={`absolute bg-white rounded-xl shadow-2xl max-w-md w-full overflow-hidden animate-in fade-in zoom-in-95 duration-300 ${
-          isCentered ? 'top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2' : ''
-        }`}
-        style={!isCentered && tooltipPosition ? {
-          top: tooltipPosition.top,
-          left: tooltipPosition.left,
-        } : undefined}
-      >
-        {/* Progress Bar */}
-        <div className="h-1 bg-gray-100">
-          <div 
-            className="h-full bg-blue-600 transition-all duration-300"
-            style={{ width: `${((currentStepIndex + 1) / steps.length) * 100}%` }}
-          />
-        </div>
-
-        {/* Content */}
-        <div className="p-6">
-          {/* Icon */}
-          {Icon && (
-            <div className="w-12 h-12 rounded-full bg-blue-100 flex items-center justify-center mb-4">
-              <Icon className="h-6 w-6 text-blue-600" />
-            </div>
-          )}
-
-          {/* Title */}
-          <h3 className="text-xl font-bold text-gray-900 mb-2">
-            {currentStep.title}
-          </h3>
-
-          {/* Description */}
-          <p className="text-gray-600 leading-relaxed">
-            {currentStep.description}
-          </p>
-
-          {/* Step Indicator */}
-          <div className="flex justify-center gap-1.5 mt-6">
-            {steps.map((_, index) => (
-              <button
-                key={index}
-                onClick={() => setCurrentStepIndex(index)}
-                className={`w-2 h-2 rounded-full transition-colors ${
-                  index === currentStepIndex
-                    ? 'bg-blue-600'
-                    : index < currentStepIndex
-                    ? 'bg-blue-300'
-                    : 'bg-gray-200'
-                }`}
-                aria-label={`Go to step ${index + 1}`}
-              />
-            ))}
-          </div>
-        </div>
-
-        {/* Actions */}
-        <div className="px-6 pb-6 flex items-center justify-between">
-          <button
-            onClick={handleSkip}
-            className="text-gray-500 hover:text-gray-700 text-sm font-medium"
-          >
-            Skip tour
-          </button>
-
-          <div className="flex gap-2">
-            {!isFirstStep && (
-              <button
-                onClick={handlePrevious}
-                className="btn btn-secondary text-sm py-2 px-3"
-              >
-                <ArrowLeftIcon className="h-4 w-4 mr-1" />
-                Back
-              </button>
-            )}
-            <button
-              onClick={handleNext}
-              className="btn btn-primary text-sm py-2 px-3"
-            >
-              {isLastStep ? (
-                <>
-                  Get Started
-                  <CheckCircleIcon className="h-4 w-4 ml-1" />
-                </>
-              ) : (
-                <>
-                  Next
-                  <ArrowRightIcon className="h-4 w-4 ml-1" />
-                </>
-              )}
-            </button>
-          </div>
-        </div>
-
-        {/* Close Button */}
-        <button
-          onClick={handleSkip}
-          className="absolute top-4 right-4 text-gray-400 hover:text-gray-600 transition-colors"
-          aria-label="Close tour"
-        >
-          <XMarkIcon className="h-5 w-5" />
-        </button>
-      </div>
-    </div>
+      mask={{
+        style: {
+          boxShadow: 'inset 0 0 15px #333',
+        },
+        color: 'rgba(0, 0, 0, 0.5)',
+      }}
+      arrow={{
+        pointAtCenter: true,
+      }}
+      animated
+    />
   );
 }
 
@@ -483,12 +462,10 @@ export function RestartTourButton({
 }: {
   className?: string;
 }) {
-  const { startTour, resetTour } = useTour();
+  const { resetTour } = useTour();
 
   const handleClick = () => {
     resetTour();
-    // Small delay to allow state update
-    setTimeout(() => startTour(), 100);
     // Reload the page to show the tour
     window.location.reload();
   };

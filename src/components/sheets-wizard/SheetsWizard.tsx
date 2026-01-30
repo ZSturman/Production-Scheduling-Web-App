@@ -15,8 +15,8 @@ import {
 import { SHEETS_TEMPLATES, getDefaultTemplate, type SheetsTemplate } from '@/lib/sheetsTemplates';
 import type { SheetsHealth } from '@/types/settings';
 
-// Step types
-type WizardStep = 'template' | 'sheets' | 'columns' | 'review';
+// Step types - combined sheets and columns into 'configure'
+type WizardStep = 'template' | 'configure' | 'review';
 
 interface SheetNameConfig {
   key: string;
@@ -78,8 +78,7 @@ export interface WizardConfig {
 
 const STEPS: { id: WizardStep; name: string; icon: typeof DocumentPlusIcon }[] = [
   { id: 'template', name: 'Select Template', icon: DocumentPlusIcon },
-  { id: 'sheets', name: 'Sheet Names', icon: TableCellsIcon },
-  { id: 'columns', name: 'Column Headers', icon: Cog6ToothIcon },
+  { id: 'configure', name: 'Configure Sheets', icon: TableCellsIcon },
   { id: 'review', name: 'Review & Apply', icon: CheckIcon },
 ];
 
@@ -219,15 +218,13 @@ export default function SheetsWizard({
     switch (currentStep) {
       case 'template':
         return !!selectedTemplate;
-      case 'sheets':
-        // All renamed sheets need confirmation
+      case 'configure':
+        // All renamed sheets need confirmation + all required columns must be enabled
         const unconfirmedRenames = sheetConfigs.filter(s => s.willRename && !confirmRenames.has(s.key));
-        return unconfirmedRenames.length === 0;
-      case 'columns':
-        // All required columns must be enabled
-        return columnConfigs.every(sheet => 
+        const requiredColumnsEnabled = columnConfigs.every(sheet => 
           sheet.columns.filter(c => c.required).every(c => c.enabled)
         );
+        return unconfirmedRenames.length === 0 && requiredColumnsEnabled;
       case 'review':
         return true;
       default:
@@ -273,19 +270,17 @@ export default function SheetsWizard({
           templates={SHEETS_TEMPLATES}
           selected={selectedTemplate}
           onSelect={setSelectedTemplate}
+          onUseDefaults={goNext}
         />;
-      case 'sheets':
-        return <SheetsStep
-          configs={sheetConfigs}
+      case 'configure':
+        return <CombinedConfigureStep
+          sheetConfigs={sheetConfigs}
+          columnConfigs={columnConfigs}
           confirmRenames={confirmRenames}
-          onNameChange={handleSheetNameChange}
+          onSheetNameChange={handleSheetNameChange}
           onConfirmRename={handleConfirmRename}
-        />;
-      case 'columns':
-        return <ColumnsStep
-          configs={columnConfigs}
-          onLabelChange={handleColumnLabelChange}
-          onToggle={handleColumnToggle}
+          onColumnLabelChange={handleColumnLabelChange}
+          onColumnToggle={handleColumnToggle}
         />;
       case 'review':
         return <ReviewStep
@@ -403,11 +398,13 @@ export default function SheetsWizard({
 function TemplateStep({ 
   templates, 
   selected, 
-  onSelect 
+  onSelect,
+  onUseDefaults,
 }: { 
   templates: SheetsTemplate[];
   selected: SheetsTemplate;
   onSelect: (template: SheetsTemplate) => void;
+  onUseDefaults: () => void;
 }) {
   return (
     <div>
@@ -451,7 +448,25 @@ function TemplateStep({
         ))}
       </div>
       
-      <div className="mt-6 p-4 bg-gray-50 rounded-lg">
+      {/* Quick action - Use defaults button */}
+      <div className="mt-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+        <div className="flex items-center justify-between">
+          <div>
+            <h4 className="font-medium text-blue-900">Quick Setup</h4>
+            <p className="text-sm text-blue-700 mt-1">
+              Use the default sheet names and columns for the selected template.
+            </p>
+          </div>
+          <button
+            onClick={onUseDefaults}
+            className="btn btn-primary btn-sm whitespace-nowrap"
+          >
+            Use Defaults →
+          </button>
+        </div>
+      </div>
+      
+      <div className="mt-4 p-4 bg-gray-50 rounded-lg">
         <p className="text-sm text-gray-600">
           <InformationCircleIcon className="w-4 h-4 inline mr-1" />
           More templates will be available in future updates. Currently, the Production Scheduling template is optimized for manufacturing workflows.
@@ -461,6 +476,177 @@ function TemplateStep({
   );
 }
 
+// Combined Configure Step - replaces separate SheetsStep and ColumnsStep
+function CombinedConfigureStep({
+  sheetConfigs,
+  columnConfigs,
+  confirmRenames,
+  onSheetNameChange,
+  onConfirmRename,
+  onColumnLabelChange,
+  onColumnToggle,
+}: {
+  sheetConfigs: SheetNameConfig[];
+  columnConfigs: SheetColumnConfigs[];
+  confirmRenames: Set<string>;
+  onSheetNameChange: (key: string, name: string) => void;
+  onConfirmRename: (key: string) => void;
+  onColumnLabelChange: (sheetKey: string, columnKey: string, label: string) => void;
+  onColumnToggle: (sheetKey: string, columnKey: string) => void;
+}) {
+  const [expandedSheet, setExpandedSheet] = useState<string | null>(null);
+
+  return (
+    <div>
+      <h2 className="text-lg font-semibold mb-2">Configure Sheets & Columns</h2>
+      <p className="text-gray-600 mb-6">
+        Click on a sheet to customize its name and column headers. Green checkmarks indicate items that already exist in your spreadsheet.
+      </p>
+      
+      <div className="space-y-4">
+        {sheetConfigs.map(sheetConfig => {
+          const columnConfig = columnConfigs.find(c => c.sheetKey === sheetConfig.key);
+          const isExpanded = expandedSheet === sheetConfig.key;
+          const enabledColumns = columnConfig?.columns.filter(c => c.enabled).length ?? 0;
+          const totalColumns = columnConfig?.columns.length ?? 0;
+          
+          return (
+            <div key={sheetConfig.key} className="border rounded-lg overflow-hidden">
+              {/* Sheet header - clickable to expand */}
+              <button
+                onClick={() => setExpandedSheet(isExpanded ? null : sheetConfig.key)}
+                className="w-full px-4 py-3 bg-gray-50 flex items-center justify-between hover:bg-gray-100 transition-colors"
+              >
+                <div className="flex items-center gap-3">
+                  {sheetConfig.existsInSpreadsheet ? (
+                    <CheckCircleIcon className="w-5 h-5 text-green-500" title="Sheet exists" />
+                  ) : (
+                    <DocumentPlusIcon className="w-5 h-5 text-gray-400" title="Will be created" />
+                  )}
+                  <div className="text-left">
+                    <span className="font-medium text-gray-900">{sheetConfig.customName}</span>
+                    {sheetConfig.willRename && (
+                      <span className="ml-2 text-xs text-yellow-600">
+                        (renaming from "{sheetConfig.defaultName}")
+                      </span>
+                    )}
+                  </div>
+                </div>
+                <div className="flex items-center gap-3">
+                  <span className="text-sm text-gray-500">
+                    {enabledColumns} / {totalColumns} columns
+                  </span>
+                  <ArrowRightIcon className={`w-4 h-4 text-gray-400 transition-transform ${isExpanded ? 'rotate-90' : ''}`} />
+                </div>
+              </button>
+              
+              {/* Expanded content */}
+              {isExpanded && (
+                <div className="p-4 border-t border-gray-200 space-y-4">
+                  {/* Sheet name input */}
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Sheet Name
+                    </label>
+                    <input
+                      type="text"
+                      value={sheetConfig.customName}
+                      onChange={(e) => onSheetNameChange(sheetConfig.key, e.target.value)}
+                      className="input w-full max-w-sm"
+                      placeholder={sheetConfig.defaultName}
+                    />
+                    
+                    {/* Rename warning */}
+                    {sheetConfig.willRename && (
+                      <div className="mt-2 p-3 bg-yellow-50 border border-yellow-200 rounded-lg max-w-lg">
+                        <div className="flex items-start">
+                          <ExclamationTriangleIcon className="w-5 h-5 text-yellow-500 mr-2 flex-shrink-0" />
+                          <div className="flex-1">
+                            <p className="text-sm text-yellow-800">
+                              This will rename the existing sheet in Google Sheets.
+                            </p>
+                            <label className="flex items-center mt-2">
+                              <input
+                                type="checkbox"
+                                checked={confirmRenames.has(sheetConfig.key)}
+                                onChange={() => onConfirmRename(sheetConfig.key)}
+                                className="rounded border-yellow-400 text-yellow-600 focus:ring-yellow-500"
+                              />
+                              <span className="ml-2 text-sm text-yellow-700">
+                                I understand and want to rename this sheet
+                              </span>
+                            </label>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                    
+                    {!sheetConfig.existsInSpreadsheet && (
+                      <p className="mt-1 text-xs text-gray-500">
+                        This sheet will be created with default headers
+                      </p>
+                    )}
+                  </div>
+                  
+                  {/* Columns section */}
+                  {columnConfig && (
+                    <div className="mt-4">
+                      <h4 className="text-sm font-medium text-gray-700 mb-2">Column Headers</h4>
+                      <div className="space-y-2 max-h-64 overflow-y-auto">
+                        {columnConfig.columns.map(column => (
+                          <div 
+                            key={column.key}
+                            className={`flex items-start gap-3 p-2 rounded ${
+                              column.enabled ? 'bg-white border' : 'bg-gray-50'
+                            }`}
+                          >
+                            {/* Enable checkbox */}
+                            <input
+                              type="checkbox"
+                              checked={column.enabled}
+                              onChange={() => onColumnToggle(sheetConfig.key, column.key)}
+                              disabled={column.required}
+                              className="mt-1 rounded border-gray-300 text-blue-600 focus:ring-blue-500 disabled:opacity-50"
+                              title={column.required ? 'Required column' : 'Toggle column'}
+                            />
+                            
+                            {/* Column info */}
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <input
+                                  type="text"
+                                  value={column.customLabel}
+                                  onChange={(e) => onColumnLabelChange(sheetConfig.key, column.key, e.target.value)}
+                                  disabled={!column.enabled}
+                                  className="input text-sm py-1 w-48"
+                                />
+                                {column.required && (
+                                  <span className="text-xs bg-red-100 text-red-700 px-2 py-0.5 rounded">
+                                    Required
+                                  </span>
+                                )}
+                                {column.existsInSheet && (
+                                  <CheckCircleIcon className="w-4 h-4 text-green-500" title="Exists in sheet" />
+                                )}
+                              </div>
+                              <p className="text-xs text-gray-500 mt-0.5">{column.description}</p>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// Keep SheetsStep for backwards compatibility but it's no longer used
 function SheetsStep({
   configs,
   confirmRenames,

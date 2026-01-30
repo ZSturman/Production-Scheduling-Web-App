@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getAuth, getFirestore, admin } from './firebase-admin';
+import { getAuth, getFirestore } from './firebase-admin';
+import type { DecodedIdToken } from 'firebase-admin/auth';
 import type { UserRole } from '@/types/enums';
 import type { User, OrgContext, GoogleSheetsConfig } from '@/types/organization';
 
@@ -35,7 +36,7 @@ export type AuthenticatedHandler = (
 /**
  * Extract and verify Firebase token from request
  */
-async function verifyToken(request: NextRequest): Promise<admin.auth.DecodedIdToken | null> {
+async function verifyToken(request: NextRequest): Promise<DecodedIdToken | null> {
   const authHeader = request.headers.get('authorization');
   
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
@@ -45,7 +46,8 @@ async function verifyToken(request: NextRequest): Promise<admin.auth.DecodedIdTo
   const token = authHeader.split('Bearer ')[1];
   
   try {
-    const auth = getAuth();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const auth = getAuth() as any;
     return await auth.verifyIdToken(token);
   } catch {
     return null;
@@ -55,7 +57,7 @@ async function verifyToken(request: NextRequest): Promise<admin.auth.DecodedIdTo
 /**
  * Get user role from custom claims
  */
-function getUserRole(decodedToken: admin.auth.DecodedIdToken): UserRole {
+function getUserRole(decodedToken: DecodedIdToken): UserRole {
   if (decodedToken.role === 'admin') return 'admin';
   if (decodedToken.role === 'planner') return 'planner';
   if (decodedToken.planner === true) return 'planner';
@@ -335,7 +337,8 @@ export async function setUserCustomClaims(
   uid: string,
   claims: { orgId?: string; role?: UserRole }
 ): Promise<void> {
-  const auth = getAuth();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const auth = getAuth() as any;
   const user = await auth.getUser(uid);
   const existingClaims = user.customClaims || {};
 

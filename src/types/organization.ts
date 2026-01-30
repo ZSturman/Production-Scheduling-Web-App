@@ -31,6 +31,11 @@ export interface GoogleSheetsConfig {
   lastValidationError: string | null;
   // Dynamic sheet names (custom names override defaults)
   sheetNames?: SheetNamesConfig;
+  // Template info
+  templateId?: string;
+  // Additional fields for config UI
+  lastUpdated?: string;
+  configHistory?: { timestamp?: string; reason?: string }[];
 }
 
 // Configuration for custom sheet names
