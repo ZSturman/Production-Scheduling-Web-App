@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { verifyAuth } from '@/lib/server/auth';
-import { createGoogleSheetsClient, SHEET_NAMES } from '@/lib/server/googleSheets';
+import { createGoogleSheetsClient } from '@/lib/server/googleSheets';
 import { getFirestore } from '@/lib/server/firebase-admin';
 import type { WizardConfig } from '@/components/sheets-wizard/SheetsWizard';
 
@@ -59,6 +59,13 @@ export async function POST(request: NextRequest) {
     const spreadsheetInfo = await sheetsService.getSpreadsheetInfo();
     const existingSheets = new Set(spreadsheetInfo.sheets);
 
+    // Get per-sheet default data options (fall back to old addDefaultData boolean for backward compatibility)
+    const defaultDataOptions = config.defaultDataOptions || {
+      workCenters: config.addDefaultData,
+      holidays: config.addDefaultData,
+      settings: config.addDefaultData,
+    };
+
     // 1. Create missing sheets
     for (const sheet of config.sheets) {
       if (!existingSheets.has(sheet.name) && !sheet.renamedFrom) {
@@ -75,15 +82,13 @@ export async function POST(request: NextRequest) {
             await sheetsService.updateSheetHeaders(sheet.name, headers);
           }
           
-          // Add default data if requested
-          if (config.addDefaultData) {
-            if (sheet.name === SHEET_NAMES.WORK_CENTERS || sheet.key === 'workCenters') {
-              await sheetsService.setupWorkCentersSheet();
-            } else if (sheet.name === SHEET_NAMES.HOLIDAYS || sheet.key === 'holidays') {
-              await sheetsService.setupHolidaysSheet();
-            } else if (sheet.name === SHEET_NAMES.SETTINGS || sheet.key === 'settings') {
-              await sheetsService.setupSettingsSheet();
-            }
+          // Add default data if requested for this specific sheet
+          if (sheet.key === 'workCenters' && defaultDataOptions.workCenters) {
+            await sheetsService.setupWorkCentersSheet();
+          } else if (sheet.key === 'holidays' && defaultDataOptions.holidays) {
+            await sheetsService.setupHolidaysSheet();
+          } else if (sheet.key === 'settings' && defaultDataOptions.settings) {
+            await sheetsService.setupSettingsSheet();
           }
         } catch (error) {
           results.errors.push({

@@ -58,8 +58,8 @@ interface ValidationResult {
 
 const steps: StepConfig[] = [
   { id: 'org', name: 'Organization', icon: BuildingOfficeIcon },
-  { id: 'sheets', name: 'Google Sheets', icon: TableCellsIcon },
   { id: 'invite', name: 'Invite Team', icon: UserGroupIcon },
+  { id: 'sheets', name: 'Google Sheets', icon: TableCellsIcon },
   { id: 'complete', name: 'Complete', icon: CheckCircleIcon },
 ];
 
@@ -499,12 +499,14 @@ export default function SetupPage() {
     if (!orgInfo?.organization) {
       setCurrentStep('org');
     } else if (orgInfo.configStatus !== 'configured') {
-      setCurrentStep('sheets');
-    } else {
-      // Already configured - either show invite or redirect
+      // Org exists but sheets not configured - show invite step first, then sheets
+      // If on org step, move to invite
       setCurrentStep('invite');
+    } else {
+      // Already configured - redirect to dashboard
+      router.replace('/dashboard');
     }
-  }, [orgInfo, dataLoading, user]);
+  }, [orgInfo, dataLoading, user, router]);
 
   // Parse service account email from JSON
   const parseServiceAccountEmail = useCallback((json: string): string | null => {
@@ -553,7 +555,7 @@ export default function SetupPage() {
       await refreshToken(); // Refresh token to get updated claims
       await refreshOrgInfo();
       toast.success('Organization created!');
-      setCurrentStep('sheets');
+      setCurrentStep('invite'); // Go to invite step after creating org
     } catch (error) {
       console.error('Failed to create org:', error);
       toast.error('Failed to create organization');
@@ -689,7 +691,7 @@ export default function SetupPage() {
       await configApi.saveGoogleSheets(spreadsheetId.trim(), serviceAccountJson);
       await refreshOrgInfo();
       toast.success('Google Sheets configured!');
-      setCurrentStep('invite');
+      setCurrentStep('complete'); // Go to complete after sheets configured
     } catch (error) {
       console.error('Failed to save config:', error);
       toast.error('Failed to save configuration');
@@ -870,7 +872,7 @@ export default function SetupPage() {
             </div>
           )}
 
-          {/* Step 2: Google Sheets - Guided Sub-steps */}
+          {/* Step 3: Google Sheets - Guided Sub-steps */}
           {currentStep === 'sheets' && (
             <div>
               <h1 className="text-2xl font-bold text-gray-900 mb-2">
@@ -1233,7 +1235,7 @@ export default function SetupPage() {
             </div>
           )}
 
-          {/* Step 3: Invite Team */}
+          {/* Step 2: Invite Team */}
           {currentStep === 'invite' && (
             <div>
               <h1 className="text-2xl font-bold text-gray-900 mb-2">
@@ -1289,10 +1291,10 @@ export default function SetupPage() {
                 )}
 
                 <button
-                  onClick={handleComplete}
+                  onClick={() => setCurrentStep('sheets')}
                   className="btn btn-primary w-full"
                 >
-                  {sentInvites.length > 0 ? 'Continue to Dashboard' : 'Skip & Continue'}
+                  {sentInvites.length > 0 ? 'Continue to Google Sheets Setup' : 'Skip & Continue to Sheets Setup'}
                   <ArrowRightIcon className="h-4 w-4 ml-2" />
                 </button>
               </div>

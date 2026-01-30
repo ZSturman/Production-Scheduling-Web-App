@@ -3,6 +3,10 @@ import {
   withOrg,
   getGoogleSheetsConfig,
   getFirestore,
+  getServiceAccountCredentials,
+  saveGoogleSheetsConfig,
+  clearOrgServiceCache,
+  createTestGoogleSheetsClient,
 } from '@/lib/server';
 import type { GoogleSheetsConfigResponse } from '@/types';
 
@@ -77,6 +81,123 @@ export const GET = withOrg(async (request, context) => {
       error: {
         code: 'GET_CONFIG_FAILED',
         message: 'Failed to get configuration',
+      },
+    }, { status: 500 });
+  }
+});
+
+// PATCH /api/config/google-sheets - Update spreadsheet ID (uses existing credentials)
+export const PATCH = withOrg(async (request, context) => {
+  try {
+    if (context.user.role !== 'admin') {
+      return NextResponse.json({
+        success: false,
+        error: {
+          code: 'FORBIDDEN',
+          message: 'Only admins can update configuration',
+        },
+      }, { status: 403 });
+    }
+
+    const orgId = context.org!.orgId;
+    const body = await request.json();
+    const { spreadsheetId } = body;
+
+    if (!spreadsheetId) {
+      return NextResponse.json({
+        success: false,
+        error: {
+          code: 'MISSING_SPREADSHEET_ID',
+          message: 'Spreadsheet ID is required',
+        },
+      }, { status: 400 });
+    }
+
+    // Validate spreadsheet ID format
+    if (typeof spreadsheetId !== 'string' || spreadsheetId.length < 10) {
+      return NextResponse.json({
+        success: false,
+        error: {
+          code: 'INVALID_SPREADSHEET_ID',
+          message: 'Invalid spreadsheet ID format',
+        },
+      }, { status: 400 });
+    }
+
+    // Get existing service account credentials
+    const serviceAccountJson = await getServiceAccountCredentials(orgId);
+    if (!serviceAccountJson) {
+      return NextResponse.json({
+        success: false,
+        error: {
+          code: 'NO_CREDENTIALS',
+          message: 'No service account credentials found. Please reconfigure Google Sheets.',
+        },
+      }, { status: 400 });
+    }
+
+    // Get existing config
+    const existingConfig = await getGoogleSheetsConfig(orgId);
+    if (!existingConfig) {
+      return NextResponse.json({
+        success: false,
+        error: {
+          code: 'NO_CONFIG',
+          message: 'No existing configuration found. Please set up Google Sheets first.',
+        },
+      }, { status: 400 });
+    }
+
+    // Test connection with new spreadsheet ID
+    const testClient = createTestGoogleSheetsClient(spreadsheetId, serviceAccountJson);
+    let spreadsheetName = '';
+    
+    try {
+      const connected = await testClient.testConnection();
+      if (!connected) {
+        throw new Error('Connection test failed');
+      }
+      const info = await testClient.getSpreadsheetInfo();
+      spreadsheetName = info.title;
+    } catch (connectionError) {
+      return NextResponse.json({
+        success: false,
+        error: {
+          code: 'CONNECTION_FAILED',
+          message: connectionError instanceof Error 
+            ? connectionError.message 
+            : 'Failed to connect to the new spreadsheet. Make sure the service account has access.',
+        },
+      }, { status: 400 });
+    }
+
+    // Save updated config
+    await saveGoogleSheetsConfig(orgId, {
+      spreadsheetId,
+      spreadsheetName,
+      serviceAccountEmail: existingConfig.serviceAccountEmail,
+      lastValidated: new Date().toISOString(),
+      lastValidationError: null,
+    });
+
+    // Clear cached service so it reconnects with new spreadsheet
+    clearOrgServiceCache(orgId);
+
+    return NextResponse.json({
+      success: true,
+      data: {
+        spreadsheetId,
+        spreadsheetName,
+        message: 'Spreadsheet ID updated successfully',
+      },
+    });
+  } catch (error) {
+    console.error('Failed to update spreadsheet ID:', error);
+    return NextResponse.json({
+      success: false,
+      error: {
+        code: 'UPDATE_FAILED',
+        message: 'Failed to update spreadsheet ID',
       },
     }, { status: 500 });
   }

@@ -68,6 +68,12 @@ export interface WizardConfig {
     }[];
   }[];
   addDefaultData: boolean;
+  // Per-sheet default data options
+  defaultDataOptions: {
+    workCenters: boolean;
+    holidays: boolean;
+    settings: boolean;
+  };
 }
 
 const STEPS: { id: WizardStep; name: string; icon: typeof DocumentPlusIcon }[] = [
@@ -90,6 +96,11 @@ export default function SheetsWizard({
   const [sheetConfigs, setSheetConfigs] = useState<SheetNameConfig[]>([]);
   const [columnConfigs, setColumnConfigs] = useState<SheetColumnConfigs[]>([]);
   const [addDefaultData, setAddDefaultData] = useState(true);
+  const [defaultDataOptions, setDefaultDataOptions] = useState({
+    workCenters: true,
+    holidays: true,
+    settings: true,
+  });
   const [confirmRenames, setConfirmRenames] = useState<Set<string>>(new Set());
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -245,6 +256,7 @@ export default function SheetsWizard({
           })),
         })),
         addDefaultData,
+        defaultDataOptions,
       };
       
       await onComplete(config);
@@ -282,6 +294,8 @@ export default function SheetsWizard({
           columnConfigs={columnConfigs}
           addDefaultData={addDefaultData}
           onAddDefaultDataChange={setAddDefaultData}
+          defaultDataOptions={defaultDataOptions}
+          onDefaultDataOptionsChange={setDefaultDataOptions}
         />;
     }
   };
@@ -632,12 +646,16 @@ function ReviewStep({
   columnConfigs,
   addDefaultData,
   onAddDefaultDataChange,
+  defaultDataOptions,
+  onDefaultDataOptionsChange,
 }: {
   template: SheetsTemplate;
   sheetConfigs: SheetNameConfig[];
   columnConfigs: SheetColumnConfigs[];
   addDefaultData: boolean;
   onAddDefaultDataChange: (value: boolean) => void;
+  defaultDataOptions: { workCenters: boolean; holidays: boolean; settings: boolean };
+  onDefaultDataOptionsChange: (options: { workCenters: boolean; holidays: boolean; settings: boolean }) => void;
 }) {
   const sheetsToCreate = sheetConfigs.filter(s => !s.existsInSpreadsheet);
   const sheetsToRename = sheetConfigs.filter(s => s.willRename);
@@ -753,23 +771,105 @@ function ReviewStep({
           </div>
         )}
 
-        {/* Default data option */}
+        {/* Default data options - per sheet */}
         {sheetsToCreate.length > 0 && (
-          <div className="border rounded-lg p-4">
-            <label className="flex items-start">
-              <input
-                type="checkbox"
-                checked={addDefaultData}
-                onChange={(e) => onAddDefaultDataChange(e.target.checked)}
-                className="rounded border-gray-300 text-blue-600 focus:ring-blue-500 mt-1"
-              />
-              <div className="ml-3">
-                <span className="font-medium text-gray-900">Add default data</span>
-                <p className="text-sm text-gray-600 mt-1">
-                  Populate new sheets with sample work centers, holidays, and settings to help you get started quickly.
-                </p>
+          <div className="border rounded-lg p-4 space-y-4">
+            <div>
+              <label className="flex items-start">
+                <input
+                  type="checkbox"
+                  checked={addDefaultData}
+                  onChange={(e) => {
+                    onAddDefaultDataChange(e.target.checked);
+                    // If unchecking main toggle, uncheck all options
+                    if (!e.target.checked) {
+                      onDefaultDataOptionsChange({
+                        workCenters: false,
+                        holidays: false,
+                        settings: false,
+                      });
+                    } else {
+                      // If checking main toggle, check all options
+                      onDefaultDataOptionsChange({
+                        workCenters: true,
+                        holidays: true,
+                        settings: true,
+                      });
+                    }
+                  }}
+                  className="rounded border-gray-300 text-blue-600 focus:ring-blue-500 mt-1"
+                />
+                <div className="ml-3">
+                  <span className="font-medium text-gray-900">Add default data</span>
+                  <p className="text-sm text-gray-600 mt-1">
+                    Populate new sheets with sample data to help you get started quickly.
+                  </p>
+                </div>
+              </label>
+            </div>
+            
+            {addDefaultData && (
+              <div className="ml-6 pl-4 border-l-2 border-gray-200 space-y-3">
+                <p className="text-sm font-medium text-gray-700">Select which sheets to populate:</p>
+                
+                {/* Work Centers option */}
+                {sheetsToCreate.some(s => s.key === 'workCenters') && (
+                  <label className="flex items-start">
+                    <input
+                      type="checkbox"
+                      checked={defaultDataOptions.workCenters}
+                      onChange={(e) => onDefaultDataOptionsChange({
+                        ...defaultDataOptions,
+                        workCenters: e.target.checked,
+                      })}
+                      className="rounded border-gray-300 text-blue-600 focus:ring-blue-500 mt-0.5"
+                    />
+                    <div className="ml-2">
+                      <span className="text-sm text-gray-900">Work Centers</span>
+                      <p className="text-xs text-gray-500">Sample work centers (Assembly, QC, Shipping)</p>
+                    </div>
+                  </label>
+                )}
+                
+                {/* Holidays option */}
+                {sheetsToCreate.some(s => s.key === 'holidays') && (
+                  <label className="flex items-start">
+                    <input
+                      type="checkbox"
+                      checked={defaultDataOptions.holidays}
+                      onChange={(e) => onDefaultDataOptionsChange({
+                        ...defaultDataOptions,
+                        holidays: e.target.checked,
+                      })}
+                      className="rounded border-gray-300 text-blue-600 focus:ring-blue-500 mt-0.5"
+                    />
+                    <div className="ml-2">
+                      <span className="text-sm text-gray-900">Holidays</span>
+                      <p className="text-xs text-gray-500">US federal holidays for the current year</p>
+                    </div>
+                  </label>
+                )}
+                
+                {/* Settings option */}
+                {sheetsToCreate.some(s => s.key === 'settings') && (
+                  <label className="flex items-start">
+                    <input
+                      type="checkbox"
+                      checked={defaultDataOptions.settings}
+                      onChange={(e) => onDefaultDataOptionsChange({
+                        ...defaultDataOptions,
+                        settings: e.target.checked,
+                      })}
+                      className="rounded border-gray-300 text-blue-600 focus:ring-blue-500 mt-0.5"
+                    />
+                    <div className="ml-2">
+                      <span className="text-sm text-gray-900">Settings</span>
+                      <p className="text-xs text-gray-500">Default scheduling settings and sync interval</p>
+                    </div>
+                  </label>
+                )}
               </div>
-            </label>
+            )}
           </div>
         )}
       </div>

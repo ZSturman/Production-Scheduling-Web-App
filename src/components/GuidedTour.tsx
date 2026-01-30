@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import {
   XMarkIcon,
@@ -24,6 +24,14 @@ export interface TourStep {
   position?: 'center' | 'top' | 'bottom' | 'left' | 'right';
 }
 
+// Types for spotlight positioning
+interface SpotlightRect {
+  top: number;
+  left: number;
+  width: number;
+  height: number;
+}
+
 const DEFAULT_TOUR_STEPS: TourStep[] = [
   {
     id: 'welcome',
@@ -38,7 +46,17 @@ const DEFAULT_TOUR_STEPS: TourStep[] = [
     description: 'This is your main dashboard. Here you\'ll see a summary of your production schedule, including products at risk and upcoming work.',
     icon: ChartBarIcon,
     targetPath: '/dashboard',
-    position: 'center',
+    targetSelector: 'main',
+    position: 'right',
+  },
+  {
+    id: 'navigation',
+    title: 'Navigation Menu',
+    description: 'Use the sidebar to navigate between different sections: Dashboard, Schedule, Products, Work Centers, and Settings.',
+    icon: ListBulletIcon,
+    targetPath: '/dashboard',
+    targetSelector: 'nav',
+    position: 'right',
   },
   {
     id: 'schedule',
@@ -46,7 +64,8 @@ const DEFAULT_TOUR_STEPS: TourStep[] = [
     description: 'The Schedule page shows a visual Gantt chart of all your products across work centers. You can see exactly when each job is scheduled to run.',
     icon: CalendarDaysIcon,
     targetPath: '/schedule',
-    position: 'center',
+    targetSelector: 'main',
+    position: 'right',
   },
   {
     id: 'products',
@@ -54,7 +73,8 @@ const DEFAULT_TOUR_STEPS: TourStep[] = [
     description: 'View and manage all your products here. You can reorder priorities by dragging products, and see their scheduling status at a glance.',
     icon: ListBulletIcon,
     targetPath: '/products',
-    position: 'center',
+    targetSelector: 'main',
+    position: 'right',
   },
   {
     id: 'work-centers',
@@ -62,7 +82,8 @@ const DEFAULT_TOUR_STEPS: TourStep[] = [
     description: 'Work centers define where products are manufactured. Each work center has specific hours of operation that affect scheduling.',
     icon: BuildingOfficeIcon,
     targetPath: '/work-centers',
-    position: 'center',
+    targetSelector: 'main',
+    position: 'right',
   },
   {
     id: 'settings',
@@ -70,7 +91,8 @@ const DEFAULT_TOUR_STEPS: TourStep[] = [
     description: 'Manage your Google Sheets connection, scheduling parameters, and team members here. Admins can also reconfigure sheets if needed.',
     icon: Cog6ToothIcon,
     targetPath: '/settings',
-    position: 'center',
+    targetSelector: 'main',
+    position: 'right',
   },
   {
     id: 'complete',
@@ -99,10 +121,84 @@ export function GuidedTour({
   const [currentStepIndex, setCurrentStepIndex] = useState(0);
   const [isVisible, setIsVisible] = useState(false);
   const [isNavigating, setIsNavigating] = useState(false);
+  const [spotlightRect, setSpotlightRect] = useState<SpotlightRect | null>(null);
+  const [tooltipPosition, setTooltipPosition] = useState<{ top: number; left: number } | null>(null);
+  const tooltipRef = useRef<HTMLDivElement>(null);
 
   const currentStep = steps[currentStepIndex];
   const isFirstStep = currentStepIndex === 0;
   const isLastStep = currentStepIndex === steps.length - 1;
+
+  // Calculate spotlight position for target element
+  const updateSpotlight = useCallback(() => {
+    if (!currentStep.targetSelector) {
+      setSpotlightRect(null);
+      setTooltipPosition(null);
+      return;
+    }
+
+    const element = document.querySelector(currentStep.targetSelector);
+    if (!element) {
+      setSpotlightRect(null);
+      setTooltipPosition(null);
+      return;
+    }
+
+    const rect = element.getBoundingClientRect();
+    const padding = 8;
+    
+    setSpotlightRect({
+      top: rect.top - padding,
+      left: rect.left - padding,
+      width: rect.width + padding * 2,
+      height: rect.height + padding * 2,
+    });
+
+    // Position tooltip based on step position preference
+    const tooltipWidth = 400;
+    const tooltipHeight = 250;
+    let top = 0;
+    let left = 0;
+
+    switch (currentStep.position) {
+      case 'right':
+        top = Math.max(20, rect.top);
+        left = Math.min(rect.right + 20, window.innerWidth - tooltipWidth - 20);
+        break;
+      case 'left':
+        top = Math.max(20, rect.top);
+        left = Math.max(20, rect.left - tooltipWidth - 20);
+        break;
+      case 'bottom':
+        top = Math.min(rect.bottom + 20, window.innerHeight - tooltipHeight - 20);
+        left = Math.max(20, rect.left);
+        break;
+      case 'top':
+        top = Math.max(20, rect.top - tooltipHeight - 20);
+        left = Math.max(20, rect.left);
+        break;
+      default:
+        // center
+        top = window.innerHeight / 2 - tooltipHeight / 2;
+        left = window.innerWidth / 2 - tooltipWidth / 2;
+    }
+
+    setTooltipPosition({ top, left });
+  }, [currentStep]);
+
+  // Update spotlight when step changes or window resizes
+  useEffect(() => {
+    if (!isVisible) return;
+    
+    // Delay to allow DOM to update after navigation
+    const timer = setTimeout(updateSpotlight, 300);
+    
+    window.addEventListener('resize', updateSpotlight);
+    return () => {
+      clearTimeout(timer);
+      window.removeEventListener('resize', updateSpotlight);
+    };
+  }, [isVisible, currentStepIndex, updateSpotlight, pathname]);
 
   // Check if tour should be shown
   useEffect(() => {
@@ -186,17 +282,66 @@ export function GuidedTour({
   }
 
   const Icon = currentStep.icon;
+  const isCentered = !spotlightRect || currentStep.position === 'center';
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center">
-      {/* Backdrop */}
-      <div 
-        className="absolute inset-0 bg-black/60 backdrop-blur-sm"
-        onClick={handleSkip}
-      />
+    <div className="fixed inset-0 z-50">
+      {/* Backdrop with spotlight cutout */}
+      {spotlightRect ? (
+        <svg className="absolute inset-0 w-full h-full" onClick={handleSkip}>
+          <defs>
+            <mask id="spotlight-mask">
+              <rect x="0" y="0" width="100%" height="100%" fill="white" />
+              <rect
+                x={spotlightRect.left}
+                y={spotlightRect.top}
+                width={spotlightRect.width}
+                height={spotlightRect.height}
+                rx="8"
+                fill="black"
+              />
+            </mask>
+          </defs>
+          <rect
+            x="0"
+            y="0"
+            width="100%"
+            height="100%"
+            fill="rgba(0, 0, 0, 0.5)"
+            mask="url(#spotlight-mask)"
+          />
+        </svg>
+      ) : (
+        <div 
+          className="absolute inset-0 bg-black/40"
+          onClick={handleSkip}
+        />
+      )}
 
-      {/* Tour Card */}
-      <div className="relative z-10 bg-white rounded-xl shadow-2xl max-w-md w-full mx-4 overflow-hidden animate-in fade-in zoom-in-95 duration-300">
+      {/* Spotlight border highlight */}
+      {spotlightRect && (
+        <div
+          className="absolute border-2 border-blue-500 rounded-lg pointer-events-none animate-pulse"
+          style={{
+            top: spotlightRect.top,
+            left: spotlightRect.left,
+            width: spotlightRect.width,
+            height: spotlightRect.height,
+          }}
+        />
+      )}
+
+      {/* Tour Card - positioned based on spotlight or centered */}
+      <div
+        ref={tooltipRef}
+        className={`absolute bg-white rounded-xl shadow-2xl max-w-md w-full overflow-hidden animate-in fade-in zoom-in-95 duration-300 ${
+          isCentered ? 'top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2' : ''
+        }`}
+        style={!isCentered && tooltipPosition ? {
+          top: tooltipPosition.top,
+          left: tooltipPosition.left,
+        } : undefined}
+      >
         {/* Progress Bar */}
         <div className="h-1 bg-gray-100">
           <div 

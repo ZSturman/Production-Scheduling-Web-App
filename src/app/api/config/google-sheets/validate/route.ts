@@ -52,10 +52,13 @@ const EXPECTED_HEADERS = {
   },
   [SHEET_NAMES.SETTINGS]: {
     required: [
-      { index: 0, name: 'Setting' },
+      { index: 0, name: 'Key' },
       { index: 1, name: 'Value' },
     ],
-    optional: [],
+    optional: [
+      { index: 2, name: 'Description' },
+      { index: 3, name: 'Notes' },
+    ],
   },
 };
 

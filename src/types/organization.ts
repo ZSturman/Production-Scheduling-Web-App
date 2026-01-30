@@ -19,6 +19,7 @@ export interface OrganizationMember {
   role: UserRole;
   joinedAt: string;
   invitedBy: string | null;
+  lastLogin?: string;
 }
 
 export interface GoogleSheetsConfig {
@@ -28,6 +29,18 @@ export interface GoogleSheetsConfig {
   configured: boolean;
   lastValidated: string | null;
   lastValidationError: string | null;
+  // Dynamic sheet names (custom names override defaults)
+  sheetNames?: SheetNamesConfig;
+}
+
+// Configuration for custom sheet names
+export interface SheetNamesConfig {
+  products: string;
+  workCenters: string;
+  holidays: string;
+  settings: string;
+  auditLog?: string;
+  syncMetadata?: string;
 }
 
 export interface EncryptedCredentials {

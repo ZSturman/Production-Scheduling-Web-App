@@ -3,6 +3,7 @@ import {
   withOrg,
   findUserOrganization,
   getGoogleSheetsConfig,
+  updateMemberLastLogin,
 } from '@/lib/server';
 
 // GET /api/organizations/me - Get current user's organization
@@ -23,6 +24,12 @@ export const GET = withOrg(async (request, context) => {
     }
 
     const { organization, member } = orgData;
+    
+    // Update member's lastLogin timestamp
+    await updateMemberLastLogin(organization.id, context.user.uid).catch(err => {
+      console.error('Failed to update lastLogin:', err);
+    });
+    
     const sheetsConfig = await getGoogleSheetsConfig(organization.id);
     const googleSheetsConfigured = !!(sheetsConfig && sheetsConfig.spreadsheetId);
 

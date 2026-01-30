@@ -14,9 +14,16 @@ import {
   ClockIcon,
   TableCellsIcon,
   QuestionMarkCircleIcon,
+  PencilIcon,
+  XMarkIcon,
+  CheckIcon,
+  UserGroupIcon,
+  EnvelopeIcon,
+  UserPlusIcon,
 } from '@heroicons/react/24/outline';
 import { RestartTourButton } from '@/components/GuidedTour';
 import type { SheetsHealth, SheetsConfigHistory } from '@/types/settings';
+import type { OrganizationMember, OrganizationInvite } from '@/types/organization';
 
 export default function SettingsPage() {
   const router = useRouter();
@@ -44,6 +51,17 @@ export default function SettingsPage() {
   const [loadingSheetsConfig, setLoadingSheetsConfig] = useState(true);
   const [rollingBack, setRollingBack] = useState(false);
   const [refreshingHealth, setRefreshingHealth] = useState(false);
+  const [editingSpreadsheetId, setEditingSpreadsheetId] = useState(false);
+  const [newSpreadsheetId, setNewSpreadsheetId] = useState('');
+  const [savingSpreadsheetId, setSavingSpreadsheetId] = useState(false);
+
+  // Members state
+  const [members, setMembers] = useState<OrganizationMember[]>([]);
+  const [pendingInvites, setPendingInvites] = useState<OrganizationInvite[]>([]);
+  const [loadingMembers, setLoadingMembers] = useState(true);
+  const [inviteEmail, setInviteEmail] = useState('');
+  const [inviteRole, setInviteRole] = useState<'viewer' | 'planner' | 'admin'>('viewer');
+  const [sendingInvite, setSendingInvite] = useState(false);
 
   // Update form when settings load
   useEffect(() => {
@@ -80,6 +98,31 @@ export default function SettingsPage() {
       }
     }
     loadSheetsConfig();
+  }, []);
+
+  // Load members and invites
+  useEffect(() => {
+    async function loadMembers() {
+      try {
+        const response = await fetch('/api/organizations');
+        const data = await response.json();
+        if (data.success && data.data) {
+          setMembers(data.data.members || []);
+        }
+        
+        // Also load pending invites
+        const invitesResponse = await fetch('/api/organizations/invites');
+        const invitesData = await invitesResponse.json();
+        if (invitesData.success && invitesData.data?.invites) {
+          setPendingInvites(invitesData.data.invites.filter((i: OrganizationInvite) => i.status === 'pending'));
+        }
+      } catch (error) {
+        console.error('Failed to load members:', error);
+      } finally {
+        setLoadingMembers(false);
+      }
+    }
+    loadMembers();
   }, []);
 
   const handleRefreshHealth = async () => {
@@ -136,6 +179,130 @@ export default function SettingsPage() {
     }
   };
 
+  const handleUpdateSpreadsheetId = async () => {
+    if (!isAdmin) {
+      toast.error('Only admins can update configuration');
+      return;
+    }
+
+    if (!newSpreadsheetId.trim()) {
+      toast.error('Please enter a spreadsheet ID');
+      return;
+    }
+
+    if (newSpreadsheetId.trim() === sheetsConfig.spreadsheetId) {
+      setEditingSpreadsheetId(false);
+      return;
+    }
+
+    setSavingSpreadsheetId(true);
+    try {
+      const response = await fetch('/api/config/google-sheets', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          spreadsheetId: newSpreadsheetId.trim(),
+        }),
+      });
+
+      const data = await response.json();
+
+      if (data.success) {
+        toast.success('Spreadsheet ID updated successfully');
+        setSheetsConfig(prev => ({
+          ...prev,
+          spreadsheetId: newSpreadsheetId.trim(),
+          spreadsheetTitle: data.data.spreadsheetName,
+        }));
+        setEditingSpreadsheetId(false);
+        // Refresh health after changing spreadsheet
+        setTimeout(() => refreshSheetsHealth(), 1000);
+      } else {
+        toast.error(data.error?.message || 'Failed to update spreadsheet ID');
+      }
+    } catch (error) {
+      console.error('Update spreadsheet ID error:', error);
+      toast.error('Failed to update spreadsheet ID');
+    } finally {
+      setSavingSpreadsheetId(false);
+    }
+  };
+
+  const startEditingSpreadsheetId = () => {
+    setNewSpreadsheetId(sheetsConfig.spreadsheetId || '');
+    setEditingSpreadsheetId(true);
+  };
+
+  const cancelEditingSpreadsheetId = () => {
+    setEditingSpreadsheetId(false);
+    setNewSpreadsheetId('');
+  };
+
+  const handleSendInvite = async () => {
+    if (!isAdmin) {
+      toast.error('Only admins can send invites');
+      return;
+    }
+
+    if (!inviteEmail.trim() || !inviteEmail.includes('@')) {
+      toast.error('Please enter a valid email');
+      return;
+    }
+
+    setSendingInvite(true);
+    try {
+      const response = await fetch('/api/organizations/invite', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: inviteEmail.trim(),
+          role: inviteRole,
+        }),
+      });
+
+      const data = await response.json();
+
+      if (data.success) {
+        toast.success(`Invite sent to ${inviteEmail}`);
+        setInviteEmail('');
+        
+        // Show invite link
+        if (data.data?.inviteLink) {
+          toast((t) => (
+            <div>
+              <p className="font-medium">Invite link:</p>
+              <p className="text-xs break-all">{data.data.inviteLink}</p>
+              <button 
+                onClick={() => {
+                  navigator.clipboard.writeText(data.data.inviteLink);
+                  toast.dismiss(t.id);
+                  toast.success('Link copied!');
+                }}
+                className="mt-2 text-blue-600 text-sm"
+              >
+                Copy link
+              </button>
+            </div>
+          ), { duration: 10000 });
+        }
+        
+        // Refresh pending invites
+        const invitesResponse = await fetch('/api/organizations/invites');
+        const invitesData = await invitesResponse.json();
+        if (invitesData.success && invitesData.data?.invites) {
+          setPendingInvites(invitesData.data.invites.filter((i: OrganizationInvite) => i.status === 'pending'));
+        }
+      } else {
+        toast.error(data.error?.message || 'Failed to send invite');
+      }
+    } catch (error) {
+      console.error('Send invite error:', error);
+      toast.error('Failed to send invite');
+    } finally {
+      setSendingInvite(false);
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!isAdmin) {
@@ -173,6 +340,138 @@ export default function SettingsPage() {
           <p className="text-gray-600">{orgInfo.organization?.name}</p>
         </div>
       )}
+
+      {/* Members Management */}
+      <div className="card">
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center gap-2">
+            <UserGroupIcon className="h-5 w-5 text-gray-600" />
+            <h3 className="font-medium text-gray-900">Team Members</h3>
+          </div>
+        </div>
+
+        {loadingMembers ? (
+          <div className="flex justify-center py-4">
+            <div className="spinner" />
+          </div>
+        ) : (
+          <div className="space-y-4">
+            {/* Members List */}
+            <div className="space-y-2">
+              {members.map((member) => (
+                <div 
+                  key={member.uid}
+                  className="flex items-center justify-between py-2 px-3 bg-gray-50 rounded-lg"
+                >
+                  <div className="flex items-center gap-3">
+                    <div className="h-8 w-8 rounded-full bg-blue-100 flex items-center justify-center">
+                      <span className="text-blue-700 font-medium text-sm">
+                        {(member.displayName || member.email)?.charAt(0).toUpperCase()}
+                      </span>
+                    </div>
+                    <div>
+                      <p className="font-medium text-gray-900 text-sm">
+                        {member.displayName || member.email}
+                      </p>
+                      <p className="text-xs text-gray-500">{member.email}</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-4">
+                    <div className="text-right">
+                      <span className={`text-xs px-2 py-0.5 rounded-full ${
+                        member.role === 'admin' ? 'bg-purple-100 text-purple-700' :
+                        member.role === 'planner' ? 'bg-blue-100 text-blue-700' :
+                        'bg-gray-100 text-gray-700'
+                      }`}>
+                        {member.role}
+                      </span>
+                      {member.lastLogin && (
+                        <p className="text-xs text-gray-400 mt-1">
+                          Last active: {new Date(member.lastLogin).toLocaleDateString()}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {/* Pending Invites */}
+            {pendingInvites.length > 0 && (
+              <div className="border-t pt-4">
+                <p className="text-sm font-medium text-gray-700 mb-2 flex items-center gap-1">
+                  <EnvelopeIcon className="h-4 w-4" />
+                  Pending Invites
+                </p>
+                <div className="space-y-2">
+                  {pendingInvites.map((invite) => (
+                    <div 
+                      key={invite.id}
+                      className="flex items-center justify-between py-2 px-3 bg-yellow-50 rounded-lg border border-yellow-100"
+                    >
+                      <div className="flex items-center gap-3">
+                        <div className="h-8 w-8 rounded-full bg-yellow-100 flex items-center justify-center">
+                          <EnvelopeIcon className="h-4 w-4 text-yellow-600" />
+                        </div>
+                        <div>
+                          <p className="font-medium text-gray-900 text-sm">{invite.email}</p>
+                          <p className="text-xs text-gray-500">
+                            Sent {new Date(invite.createdAt).toLocaleDateString()}
+                          </p>
+                        </div>
+                      </div>
+                      <span className={`text-xs px-2 py-0.5 rounded-full ${
+                        invite.role === 'admin' ? 'bg-purple-100 text-purple-700' :
+                        invite.role === 'planner' ? 'bg-blue-100 text-blue-700' :
+                        'bg-gray-100 text-gray-700'
+                      }`}>
+                        {invite.role}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Invite Form */}
+            {isAdmin && (
+              <div className="border-t pt-4">
+                <p className="text-sm font-medium text-gray-700 mb-2 flex items-center gap-1">
+                  <UserPlusIcon className="h-4 w-4" />
+                  Invite New Member
+                </p>
+                <div className="flex gap-2">
+                  <input
+                    type="email"
+                    value={inviteEmail}
+                    onChange={(e) => setInviteEmail(e.target.value)}
+                    placeholder="colleague@company.com"
+                    className="flex-1 text-sm border border-gray-300 rounded-lg px-3 py-2"
+                    disabled={sendingInvite}
+                  />
+                  <select
+                    value={inviteRole}
+                    onChange={(e) => setInviteRole(e.target.value as 'viewer' | 'planner' | 'admin')}
+                    className="text-sm border border-gray-300 rounded-lg px-3 py-2"
+                    disabled={sendingInvite}
+                  >
+                    <option value="viewer">Viewer</option>
+                    <option value="planner">Planner</option>
+                    <option value="admin">Admin</option>
+                  </select>
+                  <button
+                    onClick={handleSendInvite}
+                    disabled={sendingInvite || !inviteEmail}
+                    className="btn btn-primary text-sm"
+                  >
+                    {sendingInvite ? 'Sending...' : 'Invite'}
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
 
       {/* Google Sheets Configuration */}
       <div className="card">
@@ -219,11 +518,55 @@ export default function SettingsPage() {
                   {sheetsConfig.spreadsheetTitle || 'Connected'}
                 </span>
               </div>
-              <div className="flex items-center justify-between">
+              <div className="flex items-center justify-between gap-2">
                 <span className="text-sm text-gray-600">ID</span>
-                <span className="font-mono text-xs text-gray-700">
-                  {sheetsConfig.spreadsheetId?.slice(0, 20)}...
-                </span>
+                {editingSpreadsheetId ? (
+                  <div className="flex items-center gap-2 flex-1 max-w-md">
+                    <input
+                      type="text"
+                      value={newSpreadsheetId}
+                      onChange={(e) => setNewSpreadsheetId(e.target.value)}
+                      placeholder="Enter new spreadsheet ID"
+                      className="flex-1 font-mono text-xs px-2 py-1 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                      disabled={savingSpreadsheetId}
+                    />
+                    <button
+                      onClick={handleUpdateSpreadsheetId}
+                      disabled={savingSpreadsheetId}
+                      className="p-1 text-green-600 hover:text-green-700 disabled:opacity-50"
+                      title="Save"
+                    >
+                      {savingSpreadsheetId ? (
+                        <ArrowPathIcon className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <CheckIcon className="h-4 w-4" />
+                      )}
+                    </button>
+                    <button
+                      onClick={cancelEditingSpreadsheetId}
+                      disabled={savingSpreadsheetId}
+                      className="p-1 text-gray-500 hover:text-gray-700 disabled:opacity-50"
+                      title="Cancel"
+                    >
+                      <XMarkIcon className="h-4 w-4" />
+                    </button>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-2">
+                    <span className="font-mono text-xs text-gray-700">
+                      {sheetsConfig.spreadsheetId?.slice(0, 20)}...
+                    </span>
+                    {isAdmin && (
+                      <button
+                        onClick={startEditingSpreadsheetId}
+                        className="p-1 text-gray-400 hover:text-gray-600"
+                        title="Edit spreadsheet ID"
+                      >
+                        <PencilIcon className="h-4 w-4" />
+                      </button>
+                    )}
+                  </div>
+                )}
               </div>
               {sheetsConfig.currentConfig?.lastUpdated && (
                 <div className="flex items-center justify-between">

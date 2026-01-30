@@ -85,10 +85,28 @@ const SETTINGS_SHEET: SheetConfig = {
   name: 'Settings',
   description: 'Application settings stored in the spreadsheet.',
   columns: [
-    { key: 'setting', label: 'Setting', required: true, description: 'Setting name', dataType: 'string' },
+    { key: 'key', label: 'Key', required: true, description: 'Setting key/name', dataType: 'string' },
     { key: 'value', label: 'Value', required: true, description: 'Setting value', dataType: 'string' },
+    { key: 'description', label: 'Description', required: false, description: 'Description of what this setting does', dataType: 'string' },
+    { key: 'notes', label: 'Notes', required: false, description: 'System notes (auto-populated if setting was restored)', dataType: 'string' },
   ],
 };
+
+// Required settings that must exist in the Settings sheet
+export interface RequiredSetting {
+  key: string;
+  defaultValue: string;
+  description: string;
+  isRequired: boolean;
+}
+
+export const REQUIRED_SETTINGS: RequiredSetting[] = [
+  { key: 'atRiskBufferDays', defaultValue: '2', description: 'Days before due date to mark job as At-Risk', isRequired: true },
+  { key: 'syncIntervalSeconds', defaultValue: '60', description: 'How often to sync data from sheets (in seconds)', isRequired: true },
+  { key: 'defaultPriorityPosition', defaultValue: 'end', description: 'Where to add new products: "end" or "start"', isRequired: true },
+  { key: 'ganttRefreshMinutes', defaultValue: '5', description: 'How often to refresh Gantt chart (in minutes)', isRequired: false },
+  { key: 'minGanttDisplayHours', defaultValue: '1', description: 'Minimum hours to display on Gantt chart', isRequired: false },
+];
 
 export const PRODUCTION_SCHEDULING_TEMPLATE: SheetsTemplate = {
   id: 'production-scheduling',

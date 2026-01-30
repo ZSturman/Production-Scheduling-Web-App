@@ -1,6 +1,6 @@
 'use client';
 
-import { createContext, useContext, useState, useEffect, useCallback, ReactNode } from 'react';
+import { createContext, useContext, useState, useEffect, useCallback, ReactNode, useRef } from 'react';
 import toast from 'react-hot-toast';
 import { productsApi, workCentersApi, scheduleApi, syncApi, settingsApi, organizationsApi, sheetsHealthApi } from '@/lib/api';
 import { useAuth } from './AuthContext';
@@ -121,6 +121,7 @@ interface DataContextType {
   recalculating: boolean;
   orgConfigured: boolean;
   sheetsHealthy: boolean;
+  syncPaused: boolean;
   
   // Notifications
   lockedJobsAffected: number;
@@ -152,6 +153,10 @@ interface DataContextType {
   fixMissingSheets: () => Promise<void>;
   fixMissingHeaders: (sheetName: string) => Promise<void>;
   
+  // Sync control - pause during user actions
+  pauseSync: () => void;
+  resumeSync: () => void;
+  
   // Clear notification
   clearLockedJobsNotification: () => void;
 }
@@ -175,6 +180,10 @@ export function DataProvider({ children }: { children: ReactNode }) {
   const [syncing, setSyncing] = useState(false);
   const [recalculating, setRecalculating] = useState(false);
   
+  // Sync pause state - prevents automatic polling during user actions
+  const [syncPaused, setSyncPaused] = useState(false);
+  const syncPausedRef = useRef(false); // Ref for use in callbacks without causing re-renders
+  
   // Notifications
   const [lockedJobsAffected, setLockedJobsAffected] = useState(0);
 
@@ -183,6 +192,17 @@ export function DataProvider({ children }: { children: ReactNode }) {
   
   // Check if sheets are healthy (can load data)
   const sheetsHealthy = sheetsHealth?.status === 'healthy' || sheetsHealth?.status === 'degraded';
+
+  // Sync control functions - call these when user starts/ends interactions
+  const pauseSync = useCallback(() => {
+    setSyncPaused(true);
+    syncPausedRef.current = true;
+  }, []);
+
+  const resumeSync = useCallback(() => {
+    setSyncPaused(false);
+    syncPausedRef.current = false;
+  }, []);
 
   // Refresh functions
   const refreshOrgInfo = useCallback(async () => {
@@ -280,7 +300,8 @@ export function DataProvider({ children }: { children: ReactNode }) {
   }, [orgConfigured]);
 
   const refreshAll = useCallback(async () => {
-    setLoading(true);
+    // Don't set loading=true here - this prevents full UI replacement during refresh
+    // Only set syncing=true to indicate background activity
     try {
       await refreshOrgInfo();
       
@@ -299,8 +320,8 @@ export function DataProvider({ children }: { children: ReactNode }) {
           ]);
         }
       }
-    } finally {
-      setLoading(false);
+    } catch (error) {
+      console.error('Failed to refresh all:', error);
     }
   }, [refreshOrgInfo, orgConfigured, sheetsHealthy, refreshSheetsHealth, refreshProducts, refreshWorkCenters, refreshGantt, refreshSummary, refreshSettings]);
 
@@ -496,13 +517,16 @@ export function DataProvider({ children }: { children: ReactNode }) {
     }
   }, [user, orgConfigured, sheetsHealthy, refreshProducts, refreshWorkCenters, refreshGantt, refreshSummary, refreshSettings]);
 
-  // Polling when org is configured
+  // Polling when org is configured - respects syncPaused state
   useEffect(() => {
     if (user && orgConfigured) {
       const pollInterval = (settings?.syncIntervalSeconds || 60) * 1000;
       const intervalId = setInterval(() => {
-        refreshProducts();
-        refreshSummary();
+        // Check the ref to avoid stale closure issues
+        if (!syncPausedRef.current) {
+          refreshProducts();
+          refreshSummary();
+        }
       }, pollInterval);
       
       return () => clearInterval(intervalId);
@@ -522,6 +546,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
     recalculating,
     orgConfigured,
     sheetsHealthy,
+    syncPaused,
     lockedJobsAffected,
     refreshProducts,
     refreshWorkCenters,
@@ -540,6 +565,8 @@ export function DataProvider({ children }: { children: ReactNode }) {
     updateSettings,
     fixMissingSheets,
     fixMissingHeaders,
+    pauseSync,
+    resumeSync,
     clearLockedJobsNotification,
   };
 

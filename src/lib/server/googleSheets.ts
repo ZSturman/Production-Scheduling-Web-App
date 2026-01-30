@@ -2,12 +2,12 @@ import { google, sheets_v4 } from 'googleapis';
 import CryptoJS from 'crypto-js';
 import type { Product, WorkCenter, WeeklySchedule, TimeRange } from '@/types';
 import { DEFAULT_WEEKLY_SCHEDULE } from '@/types/workCenter';
-import { getServiceAccountCredentials, getGoogleSheetsConfig } from './firestoreService';
+import { getServiceAccountCredentials, getGoogleSheetsConfig, getSheetNamesConfig } from './firestoreService';
 import type { SheetIssue, SheetIssueCode, SheetsHealth, SheetsHealthStatus } from '@/types/settings';
-import { PRODUCTION_SCHEDULING_TEMPLATE, DEFAULT_WORK_CENTERS, DEFAULT_HOLIDAYS } from '@/lib/sheetsTemplates';
+import { PRODUCTION_SCHEDULING_TEMPLATE, DEFAULT_WORK_CENTERS, DEFAULT_HOLIDAYS, REQUIRED_SETTINGS } from '@/lib/sheetsTemplates';
 
-// Sheet names
-export const SHEET_NAMES = {
+// Default sheet names (can be overridden by org config)
+export const DEFAULT_SHEET_NAMES = {
   PRODUCTS: 'Products',
   WORK_CENTERS: 'Work Centers',
   HOLIDAYS: 'Holidays',
@@ -15,6 +15,9 @@ export const SHEET_NAMES = {
   AUDIT_LOG: '_AuditLog',
   SYNC_METADATA: '_SyncMetadata',
 };
+
+// Keep SHEET_NAMES for backward compatibility - will be replaced by dynamic lookup
+export const SHEET_NAMES = DEFAULT_SHEET_NAMES;
 
 // Column mappings for Products sheet
 export const PRODUCT_COLUMNS = {
@@ -75,10 +78,25 @@ export class GoogleSheetsService {
   private spreadsheetId: string;
   private serviceAccountCredentials: string | null = null;
   private retryDelays = [1000, 2000, 4000, 8000, 16000];
+  // Dynamic sheet names - can be overridden per organization
+  private sheetNames: typeof DEFAULT_SHEET_NAMES = { ...DEFAULT_SHEET_NAMES };
 
-  constructor(spreadsheetId: string, serviceAccountJson?: string) {
+  constructor(spreadsheetId: string, serviceAccountJson?: string, customSheetNames?: Partial<typeof DEFAULT_SHEET_NAMES>) {
     this.spreadsheetId = spreadsheetId;
     this.serviceAccountCredentials = serviceAccountJson || null;
+    if (customSheetNames) {
+      this.sheetNames = { ...DEFAULT_SHEET_NAMES, ...customSheetNames };
+    }
+  }
+
+  // Get the configured sheet names (respects custom names)
+  getSheetNames() {
+    return this.sheetNames;
+  }
+
+  // Update sheet names configuration
+  setSheetNames(names: Partial<typeof DEFAULT_SHEET_NAMES>) {
+    this.sheetNames = { ...this.sheetNames, ...names };
   }
 
   private async getClient(): Promise<sheets_v4.Sheets> {
@@ -254,14 +272,22 @@ export class GoogleSheetsService {
     const issues: SheetIssue[] = [];
     const sheetStatuses: SheetsHealth['sheets'] = [];
     
+    // Map template sheet keys to actual configured names
+    const sheetKeyToName: Record<string, string> = {
+      products: this.sheetNames.PRODUCTS,
+      workCenters: this.sheetNames.WORK_CENTERS,
+      holidays: this.sheetNames.HOLIDAYS,
+      settings: this.sheetNames.SETTINGS,
+    };
+    
     try {
       // First, check if we can connect and get spreadsheet info
       const info = await this.getSpreadsheetInfo();
       const existingSheets = new Set(info.sheets);
 
-      // Check each expected sheet from the template
+      // Check each expected sheet from the template using configured names
       for (const sheetConfig of PRODUCTION_SCHEDULING_TEMPLATE.sheets) {
-        const sheetName = sheetConfig.name;
+        const sheetName = sheetKeyToName[sheetConfig.key] || sheetConfig.name;
         const exists = existingSheets.has(sheetName);
         const requiredHeaders = sheetConfig.columns.filter(c => c.required).map(c => c.label);
         
@@ -436,12 +462,20 @@ export class GoogleSheetsService {
     const fixed: string[] = [];
     const errors: SheetIssue[] = [];
 
+    // Map template sheet keys to actual configured names
+    const sheetKeyToName: Record<string, string> = {
+      products: this.sheetNames.PRODUCTS,
+      workCenters: this.sheetNames.WORK_CENTERS,
+      holidays: this.sheetNames.HOLIDAYS,
+      settings: this.sheetNames.SETTINGS,
+    };
+
     try {
       const info = await this.getSpreadsheetInfo();
       const existingSheets = new Set(info.sheets);
 
       for (const sheetConfig of PRODUCTION_SCHEDULING_TEMPLATE.sheets) {
-        const sheetName = sheetConfig.name;
+        const sheetName = sheetKeyToName[sheetConfig.key] || sheetConfig.name;
         
         if (!existingSheets.has(sheetName)) {
           try {
@@ -452,23 +486,25 @@ export class GoogleSheetsService {
             await this.updateSheetData(`${sheetName}!A1:${this.columnToLetter(headers.length)}1`, [headers]);
             
             // Add default data for specific sheets
-            if (sheetName === SHEET_NAMES.WORK_CENTERS) {
+            if (sheetConfig.key === 'workCenters') {
               await this.updateSheetData(
                 `${sheetName}!A2:S${DEFAULT_WORK_CENTERS.length + 1}`,
                 DEFAULT_WORK_CENTERS as (string | number | boolean | null)[][]
               );
-            } else if (sheetName === SHEET_NAMES.HOLIDAYS) {
+            } else if (sheetConfig.key === 'holidays') {
               await this.updateSheetData(
                 `${sheetName}!A2:C${DEFAULT_HOLIDAYS.length + 1}`,
                 DEFAULT_HOLIDAYS as (string | number | boolean | null)[][]
               );
-            } else if (sheetName === SHEET_NAMES.SETTINGS) {
-              const defaultSettings = [
-                ['atRiskBufferDays', '2'],
-                ['syncIntervalSeconds', '60'],
-                ['defaultPriorityPosition', 'end'],
-              ];
-              await this.updateSheetData(`${sheetName}!A2:B4`, defaultSettings);
+            } else if (sheetConfig.key === 'settings') {
+              // Create default settings with Key, Value, Description, Notes columns
+              const defaultSettings = REQUIRED_SETTINGS.map(s => [
+                s.key,
+                s.defaultValue,
+                s.description,
+                '', // Empty notes
+              ]);
+              await this.updateSheetData(`${sheetName}!A2:D${defaultSettings.length + 1}`, defaultSettings);
             }
             
             fixed.push(sheetName);
@@ -518,13 +554,48 @@ export class GoogleSheetsService {
         }
       }
 
-      return await this.updateSheetHeaders(sheetName, newHeaders);
+      const result = await this.updateSheetHeaders(sheetName, newHeaders);
+      
+      // For Settings sheet, also restore any missing required settings
+      if (result.success && sheetName === this.sheetNames.SETTINGS) {
+        await this.restoreMissingRequiredSettings(data || []);
+      }
+      
+      return result;
     } catch (error) {
       return {
         success: false,
         issue: this.parseGoogleApiError(error, { sheetName, operation: 'fixMissingHeaders' }),
       };
     }
+  }
+
+  // Restore any missing required settings with a note explaining why
+  async restoreMissingRequiredSettings(existingData: string[][]): Promise<void> {
+    // Find which required settings are missing
+    const existingKeys = new Set(existingData.slice(1).map(row => row[0]));
+    const missingSettings = REQUIRED_SETTINGS.filter(s => s.isRequired && !existingKeys.has(s.key));
+    
+    if (missingSettings.length === 0) {
+      return; // All required settings present
+    }
+    
+    // Get current row count to append new rows
+    const startRow = existingData.length + 1;
+    const timestamp = new Date().toISOString();
+    
+    const newRows = missingSettings.map(setting => [
+      setting.key,
+      setting.defaultValue,
+      setting.description,
+      `Auto-restored on ${timestamp}: This setting is required for the app to function correctly. Do not delete this row.`,
+    ]);
+    
+    // Append the missing settings
+    await this.updateSheetData(
+      `${this.sheetNames.SETTINGS}!A${startRow}:D${startRow + newRows.length - 1}`,
+      newRows
+    );
   }
 
   async testConnection(): Promise<boolean> {
@@ -771,24 +842,24 @@ export class GoogleSheetsService {
   }
 
   async getAllProducts(): Promise<Product[]> {
-    const data = await this.getSheetData(SHEET_NAMES.PRODUCTS);
+    const data = await this.getSheetData(this.sheetNames.PRODUCTS);
     return data.slice(1).map((row, index) => this.parseProductRow(row, index + 1));
   }
 
   async getAllWorkCenters(): Promise<WorkCenter[]> {
-    const data = await this.getSheetData(SHEET_NAMES.WORK_CENTERS);
+    const data = await this.getSheetData(this.sheetNames.WORK_CENTERS);
     return data.slice(1).map((row, index) => this.parseWorkCenterRow(row, index + 1));
   }
 
   async updateProduct(product: Product): Promise<void> {
     const row = this.productToRow(product);
-    const range = `${SHEET_NAMES.PRODUCTS}!A${product.rowIndex}:AA${product.rowIndex}`;
+    const range = `${this.sheetNames.PRODUCTS}!A${product.rowIndex}:AA${product.rowIndex}`;
     await this.updateSheetData(range, [row]);
   }
 
   async batchUpdateProducts(products: Product[]): Promise<void> {
     const updates = products.map((product) => ({
-      range: `${SHEET_NAMES.PRODUCTS}!A${product.rowIndex}:AA${product.rowIndex}`,
+      range: `${this.sheetNames.PRODUCTS}!A${product.rowIndex}:AA${product.rowIndex}`,
       values: [this.productToRow(product)],
     }));
     
@@ -804,7 +875,7 @@ export class GoogleSheetsService {
     }[]
   ): Promise<void> {
     const batchUpdates = updates.map((u) => ({
-      range: `${SHEET_NAMES.PRODUCTS}!R${u.rowIndex}:T${u.rowIndex}`,
+      range: `${this.sheetNames.PRODUCTS}!R${u.rowIndex}:T${u.rowIndex}`,
       values: [[u.scheduledStart, u.scheduledEnd, u.scheduleStatus]],
     }));
     
@@ -815,7 +886,7 @@ export class GoogleSheetsService {
     updates: { rowIndex: number; priority: number; priorityUpdatedAt: string }[]
   ): Promise<void> {
     const batchUpdates = updates.map((u) => ({
-      range: `${SHEET_NAMES.PRODUCTS}!P${u.rowIndex}:Q${u.rowIndex}`,
+      range: `${this.sheetNames.PRODUCTS}!P${u.rowIndex}:Q${u.rowIndex}`,
       values: [[u.priority, u.priorityUpdatedAt]],
     }));
     
@@ -863,7 +934,7 @@ export class GoogleSheetsService {
       'Setup Time (hrs)', 'Ends Type', 'Scheduled Start', 'Scheduled End', 
       'Schedule Status', 'Schedule Locked', 'Lock Reason', 'Priority Updated At', 'Notes'
     ];
-    await this.updateSheetData(`${SHEET_NAMES.PRODUCTS}!A1:${this.columnToLetter(headers.length)}1`, [headers]);
+    await this.updateSheetData(`${this.sheetNames.PRODUCTS}!A1:${this.columnToLetter(headers.length)}1`, [headers]);
   }
 
   async setupWorkCentersSheet(): Promise<void> {
@@ -875,24 +946,26 @@ export class GoogleSheetsService {
       'Fri Start', 'Fri End', 'Sat Start', 'Sat End',
       'Sun Start', 'Sun End'
     ];
-    await this.updateSheetData(`${SHEET_NAMES.WORK_CENTERS}!A1:S${DEFAULT_WORK_CENTERS.length + 1}`, [headers, ...DEFAULT_WORK_CENTERS] as (string | number | boolean | null)[][]);
+    await this.updateSheetData(`${this.sheetNames.WORK_CENTERS}!A1:S${DEFAULT_WORK_CENTERS.length + 1}`, [headers, ...DEFAULT_WORK_CENTERS] as (string | number | boolean | null)[][]);
   }
 
   async setupHolidaysSheet(): Promise<void> {
     const sheetConfig = PRODUCTION_SCHEDULING_TEMPLATE.sheets.find(s => s.key === 'holidays');
     const headers = sheetConfig?.columns.map(c => c.label) || ['Date', 'Name', 'Affected Work Centers'];
-    await this.updateSheetData(`${SHEET_NAMES.HOLIDAYS}!A1:C${DEFAULT_HOLIDAYS.length + 1}`, [headers, ...DEFAULT_HOLIDAYS] as (string | number | boolean | null)[][]);
+    await this.updateSheetData(`${this.sheetNames.HOLIDAYS}!A1:C${DEFAULT_HOLIDAYS.length + 1}`, [headers, ...DEFAULT_HOLIDAYS] as (string | number | boolean | null)[][]);
   }
 
   async setupSettingsSheet(): Promise<void> {
     const sheetConfig = PRODUCTION_SCHEDULING_TEMPLATE.sheets.find(s => s.key === 'settings');
-    const headers = sheetConfig?.columns.map(c => c.label) || ['Setting', 'Value'];
-    const defaultSettings = [
-      ['atRiskBufferDays', '2'],
-      ['syncIntervalSeconds', '60'],
-      ['defaultPriorityPosition', 'end'],
-    ];
-    await this.updateSheetData(`${SHEET_NAMES.SETTINGS}!A1:B4`, [headers, ...defaultSettings]);
+    const headers = sheetConfig?.columns.map(c => c.label) || ['Key', 'Value', 'Description', 'Notes'];
+    // Create default settings with descriptions
+    const defaultSettings = REQUIRED_SETTINGS.map(s => [
+      s.key,
+      s.defaultValue,
+      s.description,
+      '', // Empty notes for initial setup
+    ]);
+    await this.updateSheetData(`${this.sheetNames.SETTINGS}!A1:D${defaultSettings.length + 1}`, [headers, ...defaultSettings]);
   }
 
   async initializeAllSheets(): Promise<{ created: string[]; errors: string[] }> {
@@ -905,10 +978,10 @@ export class GoogleSheetsService {
 
     // Define sheets to create with their setup functions
     const sheetsToSetup = [
-      { name: SHEET_NAMES.PRODUCTS, setup: () => this.setupProductsSheet() },
-      { name: SHEET_NAMES.WORK_CENTERS, setup: () => this.setupWorkCentersSheet() },
-      { name: SHEET_NAMES.HOLIDAYS, setup: () => this.setupHolidaysSheet() },
-      { name: SHEET_NAMES.SETTINGS, setup: () => this.setupSettingsSheet() },
+      { name: this.sheetNames.PRODUCTS, setup: () => this.setupProductsSheet() },
+      { name: this.sheetNames.WORK_CENTERS, setup: () => this.setupWorkCentersSheet() },
+      { name: this.sheetNames.HOLIDAYS, setup: () => this.setupHolidaysSheet() },
+      { name: this.sheetNames.SETTINGS, setup: () => this.setupSettingsSheet() },
     ];
 
     for (const { name, setup } of sheetsToSetup) {
@@ -950,7 +1023,17 @@ export async function createGoogleSheetsClient(orgId: string): Promise<GoogleShe
     throw new Error(`Service account credentials not found for organization ${orgId}`);
   }
 
-  const service = new GoogleSheetsService(gsConfig.spreadsheetId, serviceAccountJson);
+  // Load custom sheet names from config
+  const customSheetNames = gsConfig.sheetNames ? {
+    PRODUCTS: gsConfig.sheetNames.products || DEFAULT_SHEET_NAMES.PRODUCTS,
+    WORK_CENTERS: gsConfig.sheetNames.workCenters || DEFAULT_SHEET_NAMES.WORK_CENTERS,
+    HOLIDAYS: gsConfig.sheetNames.holidays || DEFAULT_SHEET_NAMES.HOLIDAYS,
+    SETTINGS: gsConfig.sheetNames.settings || DEFAULT_SHEET_NAMES.SETTINGS,
+    AUDIT_LOG: gsConfig.sheetNames.auditLog || DEFAULT_SHEET_NAMES.AUDIT_LOG,
+    SYNC_METADATA: gsConfig.sheetNames.syncMetadata || DEFAULT_SHEET_NAMES.SYNC_METADATA,
+  } : undefined;
+
+  const service = new GoogleSheetsService(gsConfig.spreadsheetId, serviceAccountJson, customSheetNames);
   serviceCache.set(orgId, { service, timestamp: Date.now() });
 
   return service;
